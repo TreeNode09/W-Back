@@ -40,7 +40,7 @@ def generateKey(out_path: str, user_id: str):
     with open(key_path, 'wb') as f: pickle.dump((encoding_key, decoding_key), f)
 
     with open(key_path, 'rb') as f: extracted, _ = pickle.load(f)
-    if extracted[0].all() != encoding_key[0].all(): raise FileNotFoundError("")
+    if extracted[0].all() != encoding_key[0].all(): raise ValueError("saved file is invalid")
 
     return key_id
 

@@ -10,7 +10,8 @@ import pickle
 from datasets import load_dataset
 from diffusers import DPMSolverMultistepScheduler
 
-from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage
+from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, Resize
+from torch.nn.functional import interpolate
 
 
 def _generateKeyID(user_id: str):    #PENDING
@@ -242,8 +243,7 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
 
         for start in range(0, len(images), batch_size):
 
-            end = min(start + batch_size, len(images))
-            chunk = images[start:end]
+            chunk = images[start : min(start + batch_size, len(images))]
 
             batch = torch.stack([tfm(im.convert("RGB")) for im in chunk], dim=0)
             size = ([im.size[0] for im in chunk], [im.size[1] for im in chunk])
@@ -251,10 +251,68 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
 
             for i, t in enumerate(croped):
 
-                global_i = start + i
                 out_image = to_pil(t.cpu())
                 out_images.append(out_image)
 
-                if out_path is not None: out_image.save(os.path.join(out_path, f"{global_i}.png"))
+                if out_path is not None: out_image.save(os.path.join(out_path, f"{start + i}.png"))
 
     return out_images
+
+
+def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
+    out_path: str | None = None, batch_size: int = 8,) -> list[Any]:
+    """Detect WaterLo watermark maps from RGB images.
+    Save visualized results if `out_path` is given.
+    
+    `compression` > 100 means no compression.
+
+    ## File:
+    - load `{in_path}/models/G.pt`
+    - load `{in_path}/models/B.pt`
+    - if `out_path` is given:
+        - create `{out_path}` if not found
+        - save maps to `{out_path}/{i}.png`
+
+    ## Return:
+    - list of watermark-map `PIL.Image`
+    """
+
+    from WaterLo.src.jpeg import add_jpeg_noise
+    from WaterLo.src.utils import rgb_to_ycbcr
+
+    if not images: return []
+    if batch_size <= 0: raise ValueError(f"batch_size={batch_size} is not positive")
+
+    models, device = _prepareWaterLo(os.path.join(in_path, "models"))
+    models.eval()
+
+    tfm = Compose([Resize((512, 512)), ToTensor()])
+    to_pil = ToPILImage()
+    results: list[Any] = []
+
+    if out_path is not None: os.makedirs(out_path, exist_ok=True)
+
+    with torch.no_grad():
+
+        for start in range(0, len(images), batch_size):
+
+            chunk = images[start : min(start + batch_size, len(images))]
+            batch = torch.stack([tfm(im.convert("RGB")) for im in chunk], dim=0).to(device)
+
+            if compression <= 100: batch = add_jpeg_noise(batch, device, compression)
+
+            bob_preds = models.B(batch)
+            pred = interpolate(bob_preds, size=batch.shape[2:], mode="nearest")
+
+            for i in range(batch.shape[0]):
+
+                img_map = rgb_to_ycbcr(batch[i].clone())
+                img_map[1] = pred[i, 0]
+                img_map[2] = 1 - pred[i, 0]
+
+                result = to_pil(img_map.detach().cpu().clamp(0, 1))
+                results.append(result)
+
+                if out_path is not None: result.save(os.path.join(out_path, f"{start + i}.png"))
+
+    return results

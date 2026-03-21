@@ -6,8 +6,11 @@ import json
 import random
 import torch
 import pickle
+
 from datasets import load_dataset
 from diffusers import DPMSolverMultistepScheduler
+
+from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage
 
 
 def _generateKeyID(user_id: str):    #PENDING
@@ -51,7 +54,7 @@ def _build_scheduler(solver_order: int = 1):
         num_train_timesteps=1000, prediction_type="epsilon", steps_offset=1, trained_betas=None, solver_order=solver_order)
 
 
-def _prepareModel(out_path: str, model_id: str, *, allow_download: bool = False) -> Any:
+def _preparePRC(out_path: str, model_id: str, *, allow_download: bool = False) -> Any:
     """Get a Stable Diffusion pipeline of a HuggingFace model with `model_id`.
     Always try local cache first.
 
@@ -163,7 +166,7 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_p
 
     # Must use a local model
     model_cache_dir = os.path.join(in_path, "models")
-    pipe = _prepareModel(model_cache_dir, model_id, allow_download=False)
+    pipe = _preparePRC(model_cache_dir, model_id, allow_download=False)
     pipe.set_progress_bar_config(disable=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -185,3 +188,63 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_p
         if out_path is not None: image.save(os.path.join(out_path, f"{i}.png"))
 
     return images
+
+
+def _prepareWaterLo(in_path: str) -> tuple[Any, torch.device]:
+    """Load WaterLo G & B weights from `{in_path}`."""
+
+    from WaterLo.src.models import Generator, Bob
+    from WaterLo.src.utils import Models
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    generator = Generator(in_channels=3, out_channels=3).to(device)
+    bob = Bob(in_channels=3, out_channels=1).to(device)
+    models = Models(generator, bob)
+    models.load(in_path)
+
+    return models, device
+
+
+def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005, out_path: str | None = None) -> list[Any]:
+    """Apply WaterLo invisible watermark to RGB images.
+    Save watermarked images if `out_path` is given.
+
+    ## File:
+    - load `{in_path}/models/G.pt`
+    - load `{in_path}/models/B.pt`
+    - if `out_path` is given:
+        - create `{out_path}` if not found
+        - save watermarked images to `{out_path}/{i}.png`
+
+    ## Return:
+    - list of watermarked `PIL.Image`
+    """
+
+    from WaterLo.src.apply_watermark import forward_watermark
+    from WaterLo.src.loader import padding
+
+    if not images: return []
+
+    models, device = _prepareWaterLo(os.path.join(in_path, "models"))
+    models.eval()
+
+    tfm = Compose([ToTensor(), Lambda(lambda x: padding(x, size=512))])
+    batch = torch.stack([tfm(im.convert("RGB")) for im in images], dim=0)
+    size = ([im.size[0] for im in images], [im.size[1] for im in images])
+
+    with torch.no_grad(): croped = forward_watermark(models, batch, size, device, alpha)
+
+    to_pil = ToPILImage()
+    out_images: list[Any] = []
+
+    if out_path is not None: os.makedirs(out_path, exist_ok=True)
+
+    for i, t in enumerate(croped):
+
+        out_image = to_pil(t.cpu())
+        out_images.append(out_image)
+
+        if out_path is not None: out_image.save(os.path.join(out_path, f"{i}.png"))
+
+    return out_images

@@ -9,19 +9,22 @@ from models import Generator, Bob
 from utils import Models, imsave, crop_padding
 
 
+def forward_watermark(models, imgs: torch.Tensor, size, device, alpha: float):
+    imgs = imgs.to(device)
+    w = models.G(imgs)
+    watermarks = (imgs + alpha * w).clamp(0, 1)
+    croped_watermarks, _ = crop_padding(watermarks, size)
+    return croped_watermarks
+
+
 def save_watermarks(models, data, device, output, alpha):
     im_nb, imgs, size, annotations = data
     imgs = imgs.to(device)
 
     batch_size = imgs.shape[0]
-    w = models.G(imgs)
-    print(alpha)
-    watermarks = imgs + alpha * w
-    watermarks[watermarks < 0] = 0
-    watermarks[watermarks > 1] = 1
-
+    # print(alpha)
+    croped_watermarks = forward_watermark(models, imgs, size, device, alpha)
     croped_images, _ = crop_padding(imgs, size)
-    croped_watermarks, _ = crop_padding(watermarks, size)
     f = open(os.path.join(output, '..', 'originals', "facial_landmarks.txt"), "a")
     torch.cuda.empty_cache()
     for i in range(batch_size):

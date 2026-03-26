@@ -4,6 +4,7 @@ import numpy as np
 import os
 import json
 import random
+import shutil
 import torch
 import pickle
 
@@ -234,6 +235,112 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
         results.append((combined, detect, decode))
 
     return results
+
+
+def makeWaterLoDataset(in_path: str, out_path: str, train_ratio: float = 0.8) -> tuple[int, int]:
+    """Prepare WaterLo train/valid folders from an image directory.
+
+    ## File:
+    - load images from `{in_path}`
+    - save train images as `{out_path}/train/train_img012.png`
+    - save valid images as `{out_path}/valid/valid_img012.png`
+
+    ## Return:
+    - numers of images in train/valid folders
+    """
+
+    if not os.path.isdir(in_path): raise FileNotFoundError(f"in_path='{in_path}' not found")
+    if not (0.0 < train_ratio < 1.0): raise ValueError(f"train_ratio={train_ratio} must be in range (0, 1)")
+
+    image_extensions = {".jpg", ".png", ".jpeg", ".JPEG"}
+    images = []
+    for name in os.listdir(in_path):
+
+        src = os.path.join(in_path, name)
+        if os.path.isfile(src) and os.path.splitext(name)[1] in image_extensions: images.append(src)
+
+    if not images: raise FileNotFoundError(f"no images found in: {in_path}")
+
+    images = sorted(images, key=lambda p: (os.path.splitext(p)[1].lower(), os.path.basename(p)))
+    random.seed(42)
+    random.shuffle(images)
+
+    n = len(images)
+    n_train = int(n * train_ratio)
+    train_list = images[:n_train]
+    valid_list = images[n_train:]
+    width = max(2, len(str(n)))
+
+    train_dir = os.path.join(out_path, "train")
+    valid_dir = os.path.join(out_path, "valid")
+    os.makedirs(train_dir, exist_ok=True)
+    os.makedirs(valid_dir, exist_ok=True)
+
+    for i, src_path in enumerate(train_list, start=1):
+
+        ext = os.path.splitext(src_path)[1]
+        dst = os.path.join(train_dir, f"train_img{i:0{width}d}{ext}")
+        shutil.copy2(src_path, dst)
+
+    for i, src_path in enumerate(valid_list, start=1):
+
+        ext = os.path.splitext(src_path)[1]
+        dst = os.path.join(valid_dir, f"valid_img{i:0{width}d}{ext}")
+        shutil.copy2(src_path, dst)
+
+    return len(train_list), len(valid_list)
+
+
+def trainWaterLo(in_path: str, out_path: str, *,
+    alpha: float = 0.005, lambd: float = 4, epochs: int = 32, batch_size: int = 8, loss: str = "ssim",
+    compression: bool = False, weights_path: str | None = None) -> None:
+    """Train WaterLo models with given train and valid images.
+
+    `loss` only supports `"mse"` or `"ssim"`.
+
+    ## File:
+    - load train images from `{in_path}/train`
+    - save best checkpoint to `{out_path}/G.pt` and `{out_path}/B.pt`
+    - save training preview images in `{out_path}` (periodically overwritten):
+        - `original.png`, `watermark.png`, `watermark_noise.png`
+        - `inner_mask_gt.png`, `outer_mask_gt.png`
+        - `inner_mask_bob.png`, `outer_mask_bob.png`, `bob_real.png`, `bob_fake.png`
+    - if `weights_path` is given:
+        - load models and resume training from `{weights_path}/G.pt` and `{weights_path}/B.pt`
+    """
+
+    from WaterLo.src.loader import loader_with_padding
+    from WaterLo.src.models import Generator, Bob
+    from WaterLo.src.loss import GeneratorLoss, BobLoss
+    from WaterLo.src.utils import Models, Losses, Optimizers
+    from WaterLo.src.main import fit
+
+    if epochs <= 0: raise ValueError(f"epochs={epochs} is not positive")
+    if batch_size <= 0: raise ValueError(f"batch_size={batch_size} is not positive")
+    if loss not in {"mse", "ssim"}: raise ValueError(f"loss='{loss}' is not 'mse' or 'ssim'")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    random.seed(1)
+    os.makedirs(out_path, exist_ok=True)
+
+    generator = Generator(in_channels=3, out_channels=3).to(device)
+    bob = Bob(in_channels=3, out_channels=1).to(device)
+    models = Models(generator, bob)
+    if weights_path is not None: models.load(weights_path)
+
+    generator_loss = GeneratorLoss(device, alpha=alpha, loss=loss)
+    bob_loss = BobLoss(device)
+    criterions = Losses(generator_loss, bob_loss)
+
+    generator_optimizer = torch.optim.AdamW(models.G.parameters(), lr=2e-4)
+    bob_optimizer = torch.optim.AdamW(models.B.parameters(), lr=2e-4)
+    optimizers = Optimizers(generator_optimizer, bob_optimizer)
+
+    # Input size fixed to 512
+    train_loader = loader_with_padding(in_path, 512, batch_size, "train")
+    valid_loader = loader_with_padding(in_path, 512, batch_size, "valid")
+
+    fit(models, epochs, criterions, optimizers, device, train_loader, valid_loader, out_path, compression, lambd, alpha)
 
 
 def _prepareWaterLo(in_path: str) -> tuple[Any, torch.device]:

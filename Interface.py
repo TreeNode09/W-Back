@@ -153,6 +153,8 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_p
 
     ## Return:
     - `images`: list of generated watermarked images
+
+    **Original Code:** `PRC/src/encode.py`
     """
 
     from PRC.src.prc import Encode
@@ -205,6 +207,8 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
 
     ## Return:
     - tuples of `combined`, `decode` and `detect`
+
+    **Original Code:** `PRC/src/decode.py`
     """
 
     from PRC.src.prc import Detect, Decode
@@ -307,6 +311,8 @@ def trainWaterLo(in_path: str, out_path: str, *,
         - `inner_mask_bob.png`, `outer_mask_bob.png`, `bob_real.png`, `bob_fake.png`
     - if `weights_path` is given:
         - load models and resume training from `{weights_path}/G.pt` and `{weights_path}/B.pt`
+
+    **Original Code:** `WaterLo/src/main.py`, in `main()`
     """
 
     from WaterLo.src.loader import loader_with_padding
@@ -344,7 +350,10 @@ def trainWaterLo(in_path: str, out_path: str, *,
 
 
 def _prepareWaterLo(in_path: str) -> tuple[Any, torch.device]:
-    """Load WaterLo G & B weights from `{in_path}`."""
+    """Load WaterLo G & B weights from `{in_path}`.
+    
+    **Original Code:** `WaterLo/src/apply_watermark.py`, in `main()`
+    """
 
     from WaterLo.src.models import Generator, Bob
     from WaterLo.src.utils import Models
@@ -373,6 +382,8 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
 
     ## Return:
     - list of watermarked `PIL.Image`
+
+    **Original Code:** `WaterLo/src/apply_watermark.py`
     """
 
     from WaterLo.src.apply_watermark import forward_watermark
@@ -427,6 +438,8 @@ def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
 
     ## Return:
     - list of watermark-map `PIL.Image`
+
+    **Original Code:** `WaterLo/src/detect_watermark.py`
     """
 
     from WaterLo.src.jpeg import add_jpeg_noise

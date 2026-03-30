@@ -1,12 +1,12 @@
 import base64
 import io
-import math
-import os
+import threading
+import uuid
 from typing import Any
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 from jsonschema import ValidationError, validate
 
 from Interface import *
@@ -16,10 +16,10 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 BASE_DIR = r"D:\W\Data"
-WATERLO_DIR = os.path.join(BASE_DIR, "waterlo")
 
 PROMPT_DATASET = "Gustavosta/Stable-Diffusion-Prompts"
 BATCH_SIZE = 8
+
 
 def _json_dict() -> dict[str, Any] | None:
 
@@ -34,6 +34,35 @@ def _png_to_b64(img: Any) -> str:
     img.save(buf, format="PNG")
 
     return base64.standard_b64encode(buf.getvalue()).decode("ascii")
+
+
+def _run_generate_job(job_id: str, sid: str, model_id: str, prompts: list[str], use_prc: bool, use_waterlo: bool,
+    alpha: float, key_id: str) -> None:
+    """Runs after HTTP 202; emits progress / result / error to ``sid`` only."""
+
+    def on_prc(current: int, total: int) -> None:
+
+        socketio.emit("generate_prc", {"job_id": job_id, "current": current, "total": total}, to=sid)
+
+    def on_wl(current: int, total: int) -> None:
+
+        socketio.emit("generate_waterlo", {"job_id": job_id, "current": current, "total": total}, to=sid)
+
+    with app.app_context():
+
+        try:
+
+            images = applyPRC(BASE_DIR, key_id, model_id, prompts, watermark=use_prc, out_path=None, on_progress=on_prc)
+
+            if use_waterlo:
+
+                images = applyWaterLo(images, BASE_DIR, alpha=alpha, batch_size=BATCH_SIZE, out_path=None, on_progress=on_wl)
+
+            b64_list = [_png_to_b64(im) for im in images]
+
+            socketio.emit("generate_done", {"job_id": job_id, "images": b64_list, "count": len(b64_list)}, to=sid,)
+
+        except Exception as e: socketio.emit("generate_error", {"job_id": job_id, "error": str(e)}, to=sid)
 
 
 @app.route("/key", methods=["GET"])
@@ -55,7 +84,7 @@ def handle_prompts():
     
     ## Query:
     - `num`: positive `int`
-    - (optional) `dataset_id`: non-empty `string`
+    - (optional) `dataset_id`: non-empty `string`, default = 'Gustavosta/Stable-Diffusion-Prompts'
 
     ## Return:
     - list of fetched prompts, length = `num`
@@ -95,31 +124,34 @@ def handle_generate_by_prompts():
     - `prompts`: non-empty `array` of `string`
     - `use_prc`: `boolean`
     - `use_waterlo`: `boolean`
+    - `socket_id`: non-empty `string`
     - `key_id`:
         - if `use_prc` is `True`: non-empty `string`
         - if `use_prc` is `False`: ignored
-    - (optional) `alpha`: `float` between (0, 1]
+    - (optional) `alpha`: `float` in (0, 1], default = 0.005
     
-    ## Return: 
-    - generated base-64 PNGs, length = `len(prompts)`
+    ## Return:
+    - ``202 Accepted``: ``{"job_id": str, "status": "accepted"}`` — generation runs in a background thread
 
-    ## Socket Event:
-    - `generate_progress`: `{"current": int, "total": int, "percent": float}`
+    ## Socket:
+    - `generate_prc`: `{"job_id": str, "current": int, "total": int}`
+    - `generate_waterlo`: `{"job_id": str, "current": int, "total": int}`
+    - `generate_done`: `{"job_id": str, "images": base64, "countl": int}`
+    - `generate_error`: `{"job_id": str, "error": str}`
     """
+
     data = _json_dict()
     if data is None: return jsonify({"error": "JSON object body required"}), 400
-
-    merged = dict(data)
-    merged.setdefault("alpha", 0.005)
 
     SCHEMA_GENERATE_BY_PROMTPS: dict[str, Any] = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
-        "required": ["model_id", "prompts", "use_prc", "use_waterlo", "alpha"],
+        "required": ["model_id", "prompts", "use_prc", "use_waterlo", "socket_id"],
         "properties": {
             "model_id": {"type": "string", "minLength": 1},
             "prompts": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "socket_id": {"type": "string", "minLength": 1},
             "use_prc": {"type": "boolean"},
             "use_waterlo": {"type": "boolean"},
             "key_id": {"type": ["string", "null"]},
@@ -136,35 +168,30 @@ def handle_generate_by_prompts():
         ]
     }
 
-    try: validate(instance=merged, schema=SCHEMA_GENERATE_BY_PROMTPS)
+    try: validate(instance=data, schema=SCHEMA_GENERATE_BY_PROMTPS)
     except ValidationError as e: return jsonify({"error": e.message}), 400
 
-    model_id = merged["model_id"].strip()
-    prompts = merged["prompts"]
-    use_prc = merged["use_prc"]
-    use_waterlo = merged["use_waterlo"]
-    alpha = float(merged["alpha"])
+    model_id = data["model_id"].strip()
+    prompts = data["prompts"]
+    use_prc = data["use_prc"]
+    use_waterlo = data["use_waterlo"]
+    alpha = float(data.get("alpha", 0.005))
 
-    if use_prc: key_id = str(merged["key_id"])
+    if use_prc: key_id = str(data["key_id"])
     else: key_id = ""
 
-    def on_generate_progress(current: int, total: int) -> None:
+    sid = str(data["socket_id"]).strip()
+    job_id = uuid.uuid4().hex
 
-        emit("generate_prc_progress", {"current": current, "total": total})
+    threading.Thread(
+        target=_run_generate_job, daemon=True,
+        kwargs= {
+            "job_id": job_id, "sid": sid, "model_id": model_id, "prompts": list(prompts),
+            "use_prc": use_prc, "use_waterlo": use_waterlo, "alpha": alpha, "key_id": key_id
+        }
+    ).start()
 
-    try:
-
-        images = applyPRC(BASE_DIR, key_id, model_id, prompts, watermark=use_prc, out_path=None,
-            on_progress=on_generate_progress)
-
-        if use_waterlo: images = applyWaterLo(images, WATERLO_DIR, alpha=alpha, batch_size=BATCH_SIZE, out_path=None)
-
-    except FileNotFoundError as e: return jsonify({"error": str(e)}), 400
-    except ValueError as e: return jsonify({"error": str(e)}), 400
-
-    b64_list = [_png_to_b64(im) for im in images]
-
-    return jsonify({"images": b64_list, "count": len(b64_list)})
+    return jsonify({"job_id": job_id, "status": "accepted"}), 202
 
 
 if __name__ == "__main__":

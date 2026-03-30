@@ -146,7 +146,7 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
     Only called when key, model and prompts are ready (key is ignored when `watermark` is False).
     Save generated images if `out_path` is given.
 
-    `on_process` is a callback function: `(current: int, total: int) -> None`
+    `on_progress` is a callback: `(current: int, total: int) -> None`
 
     ## File:
     - if `watermark`: load key from `{in_path}/keys/{key_id}.pkl`
@@ -242,8 +242,8 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     results: list[tuple[bool, bool, bool]] = []
     for img in images:
 
-        reversed_latents = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, pipe=pipe,
-            decoder_inv_steps=decoder_inv_steps)
+        reversed_latents: torch.Tensor = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, 
+            pipe=pipe, decoder_inv_steps=decoder_inv_steps)
 
         reversed_prc = prc_gaussians.recover_posteriors(reversed_latents.to(torch.float64).flatten().cpu()).flatten().cpu()
 
@@ -384,9 +384,11 @@ def _prepareWaterLo(in_path: str) -> tuple[Any, torch.device]:
 
 
 def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
-    out_path: str | None = None, batch_size: int = 8,) -> list[Any]:
+    out_path: str | None = None, batch_size: int = 8, on_progress: Callable[[int, int], None] | None = None) -> list[Any]:
     """Apply WaterLo invisible watermark to RGB images.
     Save watermarked images if `out_path` is given.
+
+    `on_progress` is a callback: `(current: int, total: int) -> None` (``current`` in ``1..len(images)``).
 
     ## File:
     - load `{in_path}/models/G.pt`
@@ -433,6 +435,8 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
                 out_images.append(out_image)
 
                 if out_path is not None: out_image.save(os.path.join(out_path, f"{start + i}.png"))
+
+                if on_progress is not None: on_progress(start + i + 1, len(images))
 
     return out_images
 

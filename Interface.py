@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -139,40 +140,46 @@ def _seed_everything(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_path: str | None = None):
-    """Apply PRC watermark by generating images from watermarked latents.
-    Only called when key, model and prompts are ready.
-    Save watermarked images if `out_path` is given.
+def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
+    out_path: str | None = None, watermark: bool = True, on_progress: Callable[[int, int], None] | None = None) -> list[Any]:
+    """Apply PRC watermark by generating images from watermarked latents, or plain SD when `watermark` is False.
+    Only called when key, model and prompts are ready (key is ignored when `watermark` is False).
+    Save generated images if `out_path` is given.
+
+    `on_process` is a callback function: `(current: int, total: int) -> None`
 
     ## File:
-    - load key from `{in_path}/keys/{key_id}.pkl`
+    - if `watermark`: load key from `{in_path}/keys/{key_id}.pkl`
     - load model from `{in_path}/models/[model_name]`, where `model_name` matches `model_id`
     - if `out_path` is given:
         - save generated images to `{out_path}/{i}.png`
 
     ## Return:
-    - `images`: list of generated watermarked images
+    - `images`: list of generated images
 
     **Original Code:** `PRC/src/encode.py`
     """
 
-    from PRC.src.prc import Encode
-    import PRC.src.pseudogaussians as prc_gaussians
     from PRC.inversion import generate
 
     if not prompts: return []
 
     INF_STEPS = 50
 
-    # Must generate a key before watermarking
-    key_file = os.path.join(in_path, "keys", f"{key_id}.pkl")
-    if not os.path.exists(key_file): raise FileNotFoundError(f"Key not found: {key_file}")
-    with open(key_file, "rb") as f: encoding_key, _ = pickle.load(f)
-
     # Must use a local model
     model_cache_dir = os.path.join(in_path, "models")
     pipe = _preparePRC(model_cache_dir, model_id, allow_download=False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if watermark:
+
+        from PRC.src.prc import Encode
+        import PRC.src.pseudogaussians as prc_gaussians
+
+        # Must generate a key before watermarking
+        key_file = os.path.join(in_path, "keys", f"{key_id}.pkl")
+        if not os.path.exists(key_file): raise FileNotFoundError(f"Key not found: {key_file}")
+        with open(key_file, "rb") as f: encoding_key, _ = pickle.load(f)
 
     if out_path is not None: os.makedirs(out_path, exist_ok=True)
 
@@ -181,8 +188,15 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_p
 
         _seed_everything(i)
 
-        prc_codeword = Encode(encoding_key)
-        init_latents = prc_gaussians.sample(prc_codeword).reshape(1, 4, 64, 64).to(device)
+        if watermark:
+
+            prc_codeword = Encode(encoding_key)
+            init_latents = prc_gaussians.sample(prc_codeword).reshape(1, 4, 64, 64).to(device)
+
+        else:
+
+            init_latents_np = np.random.randn(1, 4, 64, 64)
+            init_latents = torch.from_numpy(init_latents_np).to(torch.float64).to(device)
 
         image, _, _ = generate(prompt=prompt, init_latents=init_latents, num_inference_steps=INF_STEPS, solver_order=1,
             pipe=pipe)
@@ -190,6 +204,8 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str], out_p
         images.append(image)
 
         if out_path is not None: image.save(os.path.join(out_path, f"{i}.png"))
+
+        if on_progress is not None:  on_progress(i + 1, len(prompts))
 
     return images
 

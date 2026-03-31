@@ -211,10 +211,13 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
 
 
 def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
-    inf_steps: int = 50, decoder_inv_steps: int = 20) -> list[tuple[bool, bool, bool]]:
+    inf_steps: int = 50, decoder_inv_steps: int = 20,
+    on_progress: Callable[[int, int], None] | None = None) -> list[tuple[bool, bool, bool]]:
     """Detect / decode PRC watermark on a list of images.
 
     Reduce `decoder_inv_steps` to speed up processing.
+
+    `on_progress` is a callback: `(current: int, total: int) -> None`
 
     ## File:
     - load key from `{in_path}/keys/{key_id}.pkl`
@@ -240,7 +243,7 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     pipe = _preparePRC(model_cache_dir, model_id, allow_download=False)
 
     results: list[tuple[bool, bool, bool]] = []
-    for img in images:
+    for i, img in enumerate(images):
 
         reversed_latents: torch.Tensor = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, 
             pipe=pipe, decoder_inv_steps=decoder_inv_steps)
@@ -252,6 +255,7 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
         combined = detect or decode
 
         results.append((combined, detect, decode))
+        if on_progress is not None: on_progress(i + 1, len(images))
 
     return results
 
@@ -388,7 +392,7 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
     """Apply WaterLo invisible watermark to RGB images.
     Save watermarked images if `out_path` is given.
 
-    `on_progress` is a callback: `(current: int, total: int) -> None` (``current`` in ``1..len(images)``).
+    `on_progress` is a callback: `(current: int, total: int) -> None`
 
     ## File:
     - load `{in_path}/models/G.pt`
@@ -442,11 +446,13 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
 
 
 def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
-    out_path: str | None = None, batch_size: int = 8,) -> tuple[list[Any], list[np.ndarray]]:
+    out_path: str | None = None, batch_size: int = 8,
+    on_progress: Callable[[int, int], None] | None = None) -> tuple[list[Any], list[np.ndarray]]:
     """Detect WaterLo watermark maps from RGB images.
     Save visualized results if `out_path` is given.
 
     `compression` > 100 means no compression.
+    `on_progress` is a callback: `(current: int, total: int) -> None`
 
     ## File:
     - load `{in_path}/models/G.pt`
@@ -502,5 +508,6 @@ def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
                 maps.append(result)
 
                 if out_path is not None: result.save(os.path.join(out_path, f"{start + i}.png"))
+                if on_progress is not None: on_progress(start + i + 1, len(images))
 
     return maps, preds

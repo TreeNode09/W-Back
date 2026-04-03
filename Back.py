@@ -141,6 +141,19 @@ def _run_decode_waterlo_job(job_id: str, sid: str, pil_images: list[Any]) -> Non
         except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "error": str(e)}, to=sid)
 
 
+@socketio.on("connect")
+def handle_socket_connect(): print(f"[Socket] client connected: sid={request.sid}")
+
+
+@socketio.on("disconnect")
+def handle_socket_disconnect(): print(f"[Socket] client disconnected: sid={request.sid}")
+
+
+@app.route("/test", methods=["GET"])
+def handle_test():
+    return jsonify({"data": secrets.token_urlsafe(16)})
+
+
 @app.route("/key", methods=["GET"])
 def handle_key():
     """Generate a PRC key.

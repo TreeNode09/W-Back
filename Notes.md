@@ -18,3 +18,9 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+#### Create & Connect Backend Port on Remote Computer
+
+- Before creating the instance, add `-p 5000:5000` & set `-e OPEN_BUTTON_PORT=5000` in template config
+- Check mapped port with `env | grep VAST_TCP_PORT_5000`
+- Modify `VITE_API_BASE` in the frontend to be `VITE_API_BASE=http://<public IP>:<grepped port>`

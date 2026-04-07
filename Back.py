@@ -23,7 +23,11 @@ BASE_DIR = r"D:\W-Back\Data"
 PROMPT_DATASET = "Gustavosta/Stable-Diffusion-Prompts"
 BATCH_SIZE = 8
 
-TESTING = True
+TESTING = True  # when enabled, will use fixed images instead of real models and prompts
+
+
+def _get_job_id() -> str:
+    return secrets.token_hex(6)  # 12 hex chars
 
 
 def _load_n_images_from_test(n: int) -> list[Any]:
@@ -139,7 +143,7 @@ def _run_decode_prc_job(job_id: str, sid: str, pil_images: list[Any], key_id: st
 
             socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
 
-        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "error": str(e)}, to=sid)
+        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
 
 
 def _run_decode_waterlo_job(job_id: str, sid: str, pil_images: list[Any]) -> None:
@@ -160,7 +164,7 @@ def _run_decode_waterlo_job(job_id: str, sid: str, pil_images: list[Any]) -> Non
                 "job_id": job_id, "method": "waterlo", "maps": maps_out, "preds": preds_out, "count": len(maps_out)
             }, to=sid)
 
-        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "error": str(e)}, to=sid)
+        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "waterlo", "error": str(e)}, to=sid)
 
 
 def _run_generate_job_test(job_id: str, sid: str, model_id: str, prompts: list[str], use_prc: bool, use_waterlo: bool,
@@ -173,19 +177,17 @@ def _run_generate_job_test(job_id: str, sid: str, model_id: str, prompts: list[s
 
         try:
 
-            if use_prc:
+            for current in range(1, total + 1):
 
-                for current in range(1, total + 1):
-
-                    socketio.emit("generate_prc", {"job_id": job_id, "current": current, "total": total}, to=sid)
-                    if current < total: time.sleep(1.0)
+                socketio.emit("generate_prc", {"job_id": job_id, "current": current, "total": total}, to=sid)
+                if current <= total: time.sleep(1.0)
 
             if use_waterlo:
 
                 for current in range(1, total + 1):
 
                     socketio.emit("generate_waterlo", {"job_id": job_id, "current": current, "total": total}, to=sid)
-                    if current < total: time.sleep(1.0)
+                    if current <= total: time.sleep(1.0)
 
             images = _load_n_images_from_test(n)
             b64_list = [_png_to_b64(im) for im in images]
@@ -215,6 +217,67 @@ def _run_waterlo_images_job_test(job_id: str, sid: str, pil_images: list[Any], a
             socketio.emit("generate_done", {"job_id": job_id, "images": b64_list, "count": len(b64_list)}, to=sid)
 
         except Exception as e: socketio.emit("generate_error", {"job_id": job_id, "error": str(e)}, to=sid)
+
+
+def _run_decode_prc_job_test(job_id: str, sid: str, pil_images: list[Any], key_id: str, model_id: str) -> None:
+
+    n = len(pil_images)
+    total = max(1, n)
+
+    with app.app_context():
+
+        try:
+
+            for current in range(1, total + 1):
+
+                socketio.emit("decode_prc", {"job_id": job_id, "current": current, "total": total}, to=sid)
+                if current <= total: time.sleep(1.0)
+
+            _load_n_images_from_test(n)
+            payload = [{"combined": True, "detect": True, "decode": True} for _ in range(n)]
+            socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
+
+        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
+
+
+def _run_decode_waterlo_job_test(job_id: str, sid: str, pil_images: list[Any]) -> None:
+
+    n = len(pil_images)
+    total = max(1, n)
+
+    with app.app_context():
+
+        try:
+            from torchvision.transforms import ToPILImage, ToTensor
+            from WaterLo.src.utils import rgb_to_ycbcr
+
+            for current in range(1, total + 1):
+
+                socketio.emit("decode_waterlo", {"job_id": job_id, "current": current, "total": total}, to=sid)
+                if current <= total: time.sleep(1.0)
+
+            maps_src = _load_n_images_from_test(n)
+
+            # convert color space to YCbCr
+            tfm = ToTensor()
+            to_pil = ToPILImage()
+            maps: list[Any] = []
+            preds_out: list[list[float]] = []
+            for im in maps_src:
+                t = tfm(im.convert("RGB"))
+                pred = t[0].clone()
+                img_map = rgb_to_ycbcr(t.clone())
+                img_map[1] = pred
+                img_map[2] = 1 - pred
+                maps.append(to_pil(img_map.detach().cpu().clamp(0, 1)))
+                preds_out.append(pred.detach().float().cpu().numpy().tolist())
+
+            maps_out = [_png_to_b64(im) for im in maps]
+            socketio.emit("decode_done", {
+                "job_id": job_id, "method": "waterlo", "maps": maps_out, "preds": preds_out, "count": len(maps_out)
+            }, to=sid)
+
+        except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "waterlo", "error": str(e)}, to=sid)
 
 
 @socketio.on("connect")
@@ -346,7 +409,7 @@ def handle_generate_by_prompts():
     else: key_id = ""
 
     sid = str(data["socket_id"]).strip()
-    job_id = secrets.token_hex(16)
+    job_id = _get_job_id()
 
     run = _run_generate_job_test if TESTING else _run_generate_job
     threading.Thread(target=run, daemon=True,
@@ -393,7 +456,7 @@ def handle_generate_by_images():
 
         if not (0.0 < alpha <= 1.0): return jsonify({"error": "`alpha` must be in (0, 1]"}), 400
 
-    job_id = secrets.token_hex(16)
+    job_id = _get_job_id()
     run = _run_waterlo_images_job_test if TESTING else _run_waterlo_images_job
     threading.Thread(target=run, daemon=True,
         kwargs={
@@ -404,23 +467,29 @@ def handle_generate_by_images():
     return jsonify({"job_id": job_id, "status": "accepted"}), 202
 
 
-@app.route("/decode/prc", methods=["POST"])
-def handle_decode_prc():
-    """Decode PRC from uploaded images.
+@app.route("/decode", methods=["POST"])
+def handle_decode():
+    """Run selected decode branches (PRC / WaterLo) on uploaded RGB images.
 
     ## Request (`multipart/form-data`):
     - `images`: images readable to PIL
     - `socket_id`: non-empty `string`
-    - `model_id`: non-empty `string`
-    - `key_id`: non-empty `string`
+    - `use_prc`: `boolean`
+    - `use_waterlo`: `boolean`
+    - ·model_id`, `key_id`:
+        - if `use_prc` is `True`: non-empty `string`
+        - if `use_prc` is `False`: ignored
 
     ## Return:
     - `202 Accepted`: `{"job_id": str, "status": "accepted"}`
 
     ## Socket:
     - `decode_prc`: `{"job_id": str, "current": int, "total": int}`
-    - `decode_done`: `{"job_id": str, "method": "prc", "results": [...], "count": int}`
-    - `decode_error`: `{"job_id": str, "error": str}`
+    - `decode_waterlo`: `{"job_id": str, "current": int, "total": int}`
+    - `decode_done`:
+        - `{"job_id": str, "method": "prc", "results": [{"combined": bool, "detect": bool, "decode": bool}, ...], "count": int}`
+        - `{"job_id": str, "method": "waterlo", "maps": [base64, ...], "preds": [[float, ...], ...], "count": int}`
+    - `decode_error`: `{"job_id": str, "method": "prc"|"waterlo", "error": str}`
     """
 
     loaded, err = _load_images_from_request("images")
@@ -428,52 +497,47 @@ def handle_decode_prc():
 
     sid = (request.form.get("socket_id") or "").strip()
     if not sid: return jsonify({"error": "invalid `socket_id`"}), 400
+
+    def parse_bool(name: str) -> bool | None:
+        raw = (request.form.get(name) or "").strip().lower()
+        if raw in ("true", "1"): return True
+        if raw in ("false", "0"): return False
+        return None
+
+    use_prc = parse_bool("use_prc")
+    if use_prc is None: return jsonify({"error": "invalid `use_prc` (expected true/false)"}), 400
+
+    use_waterlo = parse_bool("use_waterlo")
+    if use_waterlo is None: return jsonify({"error": "invalid `use_waterlo` (expected true/false)"}), 400
+
+    if not (use_prc or use_waterlo): return jsonify({"error": "at least one of `use_prc` / `use_waterlo` must be true"}), 400
 
     model_id = (request.form.get("model_id") or "").strip()
-    if not model_id: return jsonify({"error": "invalid `model_id`"}), 400
-
     key_id = (request.form.get("key_id") or "").strip()
-    if not key_id: return jsonify({"error": "invalid `key_id`"}), 400
+    if use_prc and not model_id: return jsonify({"error": "invalid `model_id`"}), 400
+    if use_prc and not key_id: return jsonify({"error": "invalid `key_id`"}), 400
 
-    job_id = secrets.token_hex(16)
-    threading.Thread(target=_run_decode_prc_job, daemon=True,
-        kwargs={
-            "job_id": job_id, "sid": sid, "pil_images": loaded, "key_id": key_id, "model_id": model_id
-        }
-    ).start()
+    pil_prc = [im.copy() for im in loaded] if use_prc else []
+    pil_wl = [im.copy() for im in loaded] if use_waterlo else []
 
-    return jsonify({"job_id": job_id, "status": "accepted"}), 202
+    job_id = _get_job_id()
+    if use_prc:
 
+        run = _run_decode_prc_job_test if TESTING else _run_decode_prc_job
+        threading.Thread(target=run, daemon=True,
+            kwargs={
+                "job_id": job_id, "sid": sid, "pil_images": pil_prc, "key_id": key_id, "model_id": model_id
+            }
+        ).start()
 
-@app.route("/decode/waterlo", methods=["POST"])
-def handle_decode_waterlo():
-    """Detect WaterLo from uploaded images.
+    if use_waterlo:
 
-    ## Request (`multipart/form-data`):
-    - `images`: images readable to PIL
-    - `socket_id`: non-empty `string`
-
-    ## Return:
-    - `202 Accepted`: `{"job_id": str, "status": "accepted"}`
-
-    ## Socket:
-    - `decode_waterlo`: `{"job_id": str, "current": int, "total": int}`
-    - `decode_done`: `{"job_id": str, "method": "waterlo", "maps": [...], "preds": [...], "count": int}`
-    - `decode_error`: `{"job_id": str, "error": str}`
-    """
-
-    loaded, err = _load_images_from_request("images")
-    if err is not None: return jsonify({"error": err}), 400
-
-    sid = (request.form.get("socket_id") or "").strip()
-    if not sid: return jsonify({"error": "invalid `socket_id`"}), 400
-
-    job_id = secrets.token_hex(16)
-    threading.Thread(target=_run_decode_waterlo_job, daemon=True,
-        kwargs={
-            "job_id": job_id, "sid": sid, "pil_images": loaded
-        }
-    ).start()
+        run = _run_decode_waterlo_job_test if TESTING else _run_decode_waterlo_job
+        threading.Thread(target=run, daemon=True,
+            kwargs={
+                "job_id": job_id, "sid": sid, "pil_images": pil_wl
+            }
+        ).start()
 
     return jsonify({"job_id": job_id, "status": "accepted"}), 202
 

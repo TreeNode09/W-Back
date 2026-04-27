@@ -234,7 +234,7 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
 
 def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     inf_steps: int = 50, decoder_inv_steps: int = 20,
-    on_progress: Callable[[int, int], None] | None = None) -> list[tuple[bool, bool, bool]]:
+    on_progress: Callable[[int, int], None] | None = None) -> list[tuple[bool, str | None]]:
     """Detect / decode PRC watermark on a list of images.
 
     Reduce `decoder_inv_steps` to speed up processing.
@@ -246,7 +246,7 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     - load model from `{in_path}/models/[model_name]`, where `model_name` matches `model_id`
 
     ## Return:
-    - tuples of `combined`, `decode` and `detect`
+    - tuples of `detect` and decoded message bit-string (or `None` when decode fails)
 
     **Original Code:** `PRC/src/decode.py`
     """
@@ -264,7 +264,7 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     model_cache_dir = os.path.join(in_path, "models")
     pipe = preparePRC(model_cache_dir, model_id, allow_download=False)
 
-    results: list[tuple[bool, bool, bool]] = []
+    results: list[tuple[bool, str | None]] = []
     for i, img in enumerate(images):
 
         reversed_latents: torch.Tensor = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, 
@@ -272,11 +272,13 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
 
         reversed_prc = prc_gaussians.recover_posteriors(reversed_latents.to(torch.float64).flatten().cpu()).flatten().cpu()
 
-        detect = Detect(decoding_key, reversed_prc)
-        decode = Decode(decoding_key, reversed_prc) is not None
-        combined = detect or decode
+        detect = bool(Detect(decoding_key, reversed_prc))
+        decoded_message = Decode(decoding_key, reversed_prc)
 
-        results.append((combined, detect, decode))
+        if decoded_message is None: decode_bits = None
+        else: decode_bits = "".join(str(int(b)) for b in np.array(decoded_message).tolist())
+
+        results.append((detect, decode_bits))
         if on_progress is not None: on_progress(i + 1, len(images))
 
     return results

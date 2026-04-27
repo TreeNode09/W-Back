@@ -139,7 +139,7 @@ def _run_decode_prc_job(job_id: str, sid: str, pil_images: list[Any], key_id: st
         try:
 
             results = decodePRC(BASE_DIR, key_id, model_id, pil_images, on_progress=on_prc)
-            payload = [{"combined": c, "detect": d, "decode": de} for (c, d, de) in results]
+            payload = [{"detect": detect, "decode_bits": bits} for (detect, bits) in results]
 
             socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
 
@@ -234,7 +234,7 @@ def _run_decode_prc_job_test(job_id: str, sid: str, pil_images: list[Any], key_i
                 if current <= total: time.sleep(1.0)
 
             _load_n_images_from_test(n)
-            payload = [{"combined": True, "detect": True, "decode": True} for _ in range(n)]
+            payload = [{"detect": True, "decode_bits": "0" * 64} for _ in range(n)]
             socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
 
         except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
@@ -487,7 +487,7 @@ def handle_decode():
     - `decode_prc`: `{"job_id": str, "current": int, "total": int}`
     - `decode_waterlo`: `{"job_id": str, "current": int, "total": int}`
     - `decode_done`:
-        - `{"job_id": str, "method": "prc", "results": [{"combined": bool, "detect": bool, "decode": bool}, ...], "count": int}`
+        - `{"job_id": str, "method": "prc", "results": [{"detect": bool, "decode_bits": str | null}, ...], "count": int}`
         - `{"job_id": str, "method": "waterlo", "maps": [base64, ...], "preds": [[float, ...], ...], "count": int}`
     - `decode_error`: `{"job_id": str, "method": "prc"|"waterlo", "error": str}`
     """

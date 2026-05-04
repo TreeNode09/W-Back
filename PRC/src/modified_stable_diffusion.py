@@ -129,7 +129,10 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
         text_embeddings_tuple = self.encode_prompt(
             prompt, device, num_images_per_prompt, do_classifier_free_guidance, negative_prompt
         )
-        text_embeddings = torch.cat([text_embeddings_tuple[1], text_embeddings_tuple[0]])
+        if do_classifier_free_guidance:
+            text_embeddings = torch.cat([text_embeddings_tuple[1], text_embeddings_tuple[0]])
+        else:
+            text_embeddings = text_embeddings_tuple[0]
         
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -191,14 +194,14 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
                         callback(i, t, latents)
 
         # 8. Post-processing
-        image = self.decode_latents(latents)
-
-        # 9. Run safety checker
-        image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
-
-        # 10. Convert to PIL
-        if output_type == "pil":
-            image = self.numpy_to_pil(image)
+        if output_type == "latent":
+            image = latents
+            has_nsfw_concept = None
+        else:
+            image = self.decode_latents(latents)
+            image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
+            if output_type == "pil":
+                image = self.numpy_to_pil(image)
 
         if not return_dict:
             return (image, has_nsfw_concept)

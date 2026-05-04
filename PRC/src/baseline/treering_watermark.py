@@ -5,8 +5,8 @@ import PIL
 import pickle
 from diffusers import DDIMInverseScheduler
 from typing import Union, List, Tuple
-import hashlib
 import os
+import secrets
 
 
 def _circle_mask(size=64, r=10, x_offset=0, y_offset=0):
@@ -42,8 +42,17 @@ def _get_pattern(shape, w_pattern='ring', generator=None):
     return gt_patch
 
 
+def _validate_treering_key_stem(stem: str) -> str:
+
+    s = str(stem).strip()
+    if not s or len(s) > 128: raise ValueError("key_stem must be a non-empty string of length at most 128")
+    if not all(c in "0123456789abcdefABCDEF" for c in s): raise ValueError("key_stem must contain only hexadecimal characters")
+    return s
+
+
 # def get_noise(shape: Union[torch.Size, List, Tuple], model_hash: str) -> torch.Tensor:
-def tr_get_noise(shape: Union[torch.Size, List, Tuple], keys_path, from_file: str = None, generator=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def tr_get_noise(shape: Union[torch.Size, List, Tuple], keys_path, from_file: str = None, generator=None, *,
+    key_stem: str | None = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if not from_file:
         # for now we hard code all hyperparameters
         w_channel = 0  # id for watermarked channel
@@ -68,14 +77,8 @@ def tr_get_noise(shape: Union[torch.Size, List, Tuple], keys_path, from_file: st
         init_latents_fft[w_mask] = w_key[w_mask].clone()
         init_latents = torch.fft.ifft2(torch.fft.ifftshift(init_latents_fft, dim=(-1, -2))).real
 
-        # convert the tensor to bytes
-        tensor_bytes = init_latents.numpy().tobytes()
-
-        # generate a hash from the bytes
-        hash_object = hashlib.sha256(tensor_bytes)
-        hex_dig = hash_object.hexdigest()
-
-        file_name = "_".join([hex_dig, str(w_channel), str(w_radius), w_pattern]) + ".pkl"
+        stem = secrets.token_hex(16) if key_stem is None else _validate_treering_key_stem(key_stem)
+        file_name = stem + ".pkl"
         file_path = os.path.join(keys_path, file_name)
         print(f"Saving watermark key to {file_path}")
         with open(f'{file_path}', 'wb') as f:
@@ -121,23 +124,22 @@ def tr_detect(image: Union[PIL.Image.Image, torch.Tensor, np.ndarray], pipe, key
 
     # ddim inversion
     curr_scheduler = pipe.scheduler
-    pipe.scheduler = DDIMInverseScheduler.from_config(pipe.scheduler.config)
+    inv_cfg = {k: v for k, v in dict(pipe.scheduler.config).items() if k != "solver_order"}
+    pipe.scheduler = DDIMInverseScheduler.from_config(inv_cfg)
     img = _transform_img(image).unsqueeze(0).to(pipe.unet.dtype).to(pipe.device)
     image_latents = pipe.vae.encode(img).latent_dist.mode() * 0.18215
-    inverted_latents = pipe(
+    out, _ = pipe(
         prompt='',
         latents=image_latents,
         guidance_scale=1,
         num_inference_steps=detection_time_num_inference,
         output_type='latent',
     )
-    inverted_latents = inverted_latents.images.float().cpu()
+    inverted_latents = out.images.float().cpu()
 
     inverted_latents_fft = torch.fft.fftshift(torch.fft.fft2(inverted_latents), dim=(-1, -2))
     dist = torch.abs(inverted_latents_fft[w_mask] - w_key[w_mask]).mean().item()
 
-    if dist <= threshold:
-        pipe.scheduler = curr_scheduler
-        return dist, True
-
-    return dist, False
+    detected = dist <= threshold
+    pipe.scheduler = curr_scheduler
+    return dist, detected

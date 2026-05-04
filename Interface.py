@@ -1,8 +1,10 @@
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import os
+import time
 import json
 import random
 import secrets
@@ -16,16 +18,62 @@ from diffusers import DPMSolverMultistepScheduler
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, Resize
 from torch.nn.functional import interpolate
 
+TIMING: bool = False # Only set to `True` during timing evaluations
+
+_TIMING_SAMPLES: dict[str, list[float]] = defaultdict(list)
+
+
+def clear_timing_stats() -> None: _TIMING_SAMPLES.clear()
+
+
+def get_timing_stats(*, skip_first: int = 0) -> dict[str, dict[str, float]]:
+    """Get timing information of samples (except the first few skipped) when `TIMING == True`.
+    
+    ## Labels:
+    - PRC apply: `PRC_apply_latent`, `PRC_apply_latent_plain`, `SD_generate`
+    - PRC decode: `SD_inversion`, `PRC_recover_posteriors`, `PRC_detect`, `PRC_decode`
+    - WL apply: `WL_apply_batch_pre`, `WL_apply_batch`, `WL_apply_batch_post`
+    - WL detect: `WL_detect_batch_pre`, `WL_detect_batch`, `WL_detect_batch_post`
+    - TreeRing decode: (not instrumented)
+    """
+
+    out: dict[str, dict[str, float]] = {}
+    for k, samples in _TIMING_SAMPLES.items():
+
+        arr = np.asarray(samples, dtype=np.float64)
+        n = int(arr.size)
+        if skip_first > 0 and n > skip_first: tail = arr[skip_first:]
+        elif skip_first > 0: tail = arr[:0]
+        else: tail = arr
+
+        nt = int(tail.size)
+        out[k] = {
+            "count": float(n),
+            "mean_all": float(arr.mean()) if n else 0.0,
+            "first": float(arr[0]) if n else 0.0,
+            "mean_filtered": float(tail.mean()) if nt else 0.0,
+            "std_filtered": float(tail.std(ddof=0)) if nt > 1 else 0.0,
+        }
+
+    return out
+
+
+def _timing_add(label: str, elapsed: float) -> None:
+
+    if not TIMING: return
+
+    _TIMING_SAMPLES[label].append(float(elapsed))
+
 
 def generateKey(out_path: str) -> str:
-    """Generate a PRC key pair and save under ``out_path``.
+    """Generate a PRC key pair and save under `out_path`.
 
     ## File:
     - create `{out_path}/keys` if not found
     - save key to `{out_path}/keys/{key_id}.pkl`
 
     ## Return:
-    - ``key_id``: cryptographically random hex string
+    - `key_id`: cryptographically random hex string
     """
 
     from PRC.src.prc import KeyGen
@@ -232,16 +280,22 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
                 message_text = str(message_fn(i))
                 message = _text_to_payload_bits(message_text, max_message_bits)
 
+            t = time.perf_counter()
             prc_codeword = Encode(encoding_key, message=message)
             init_latents = prc_gaussians.sample(prc_codeword).reshape(1, 4, 64, 64).to(device)
+            _timing_add("PRC_apply_latent", time.perf_counter() - t)
 
         else:
 
+            t = time.perf_counter()
             init_latents_np = np.random.randn(1, 4, 64, 64)
             init_latents = torch.from_numpy(init_latents_np).to(torch.float64).to(device)
+            _timing_add("PRC_apply_latent_plain", time.perf_counter() - t)
 
+        t = time.perf_counter()
         image, _, _ = generate(prompt=prompt, init_latents=init_latents, num_inference_steps=INF_STEPS, solver_order=1,
             pipe=pipe)
+        _timing_add("SD_generate", time.perf_counter() - t)
 
         images.append(image)
 
@@ -287,18 +341,131 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     results: list[tuple[bool, str | None]] = []
     for i, img in enumerate(images):
 
+        t = time.perf_counter()
         reversed_latents: torch.Tensor = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, 
             pipe=pipe, decoder_inv_steps=decoder_inv_steps)
+        _timing_add("SD_inversion", time.perf_counter() - t)
 
+        t = time.perf_counter()
         reversed_prc = prc_gaussians.recover_posteriors(reversed_latents.to(torch.float64).flatten().cpu()).flatten().cpu()
+        _timing_add("PRC_recover_posteriors", time.perf_counter() - t)
 
+        t = time.perf_counter()
         detect = bool(Detect(decoding_key, reversed_prc))
+        _timing_add("PRC_detect", time.perf_counter() - t)
+
+        t = time.perf_counter()
         decoded_message = Decode(decoding_key, reversed_prc)
+        _timing_add("PRC_decode", time.perf_counter() - t)
 
         if decoded_message is None: decode_bits = None
         else: decode_bits = "".join(str(int(b)) for b in np.array(decoded_message).tolist())
 
         results.append((detect, decode_bits))
+        if on_progress is not None: on_progress(i + 1, len(images))
+
+    return results
+
+
+def applyTreeRing(in_path: str, model_id: str, prompts: list[str], *, out_path: str | None = None,
+    key_id: str | None = None, key_gen_seed: int = 0,
+    on_progress: Callable[[int, int], None] | None = None) -> tuple[list[Any], str]:
+    """Generate images with Tree-Ring watermark, the baseline method.
+
+    ## File:
+    - load or create `{in_path}/treering_keys/{key_id}.pkl`
+    - load model from `{in_path}/models/[model_name]`, where `model_name` matches `model_id`
+
+    ## Return:
+    - `images`: list of generated PIL images
+    - `key_id`: basename of the Tree-Ring key (for `decodeTreeRing`)
+
+    **Original Code:** `PRC/src/baseline/treering_watermark.py`, in `tr_get_noise`
+    """
+
+    from PRC.src.baseline.treering_watermark import tr_get_noise
+    from PRC.inversion import generate
+
+    if not prompts: return [], key_id or ""
+
+    INF_STEPS = 50
+    shape = (1, 4, 64, 64)
+
+    keys_path = os.path.join(in_path, "treering_keys")
+    os.makedirs(keys_path, exist_ok=True)
+
+    if key_id is None:
+
+        key_id = secrets.token_hex(16)
+        g0 = torch.Generator().manual_seed(key_gen_seed)
+        _, _, _ = tr_get_noise(shape, keys_path, from_file=None, generator=g0, key_stem=key_id)
+        if not os.path.isfile(os.path.join(keys_path, f"{key_id}.pkl")):
+            raise RuntimeError(f"TreeRing key file missing after tr_get_noise: expected {key_id}.pkl in {keys_path}")
+
+    else:
+
+        key_file = os.path.join(keys_path, f"{key_id}.pkl")
+        if not os.path.isfile(key_file): raise FileNotFoundError(f"TreeRing key not found: {key_file}")
+
+    model_cache_dir = os.path.join(in_path, "models")
+    pipe = preparePRC(model_cache_dir, model_id, allow_download=False)
+    device = next(pipe.unet.parameters()).device
+
+    if out_path is not None: os.makedirs(out_path, exist_ok=True)
+
+    images: list[Any] = []
+    for i, prompt in enumerate(prompts):
+
+        _seed_everything(i)
+        g_i = torch.Generator().manual_seed(key_gen_seed + 1 + i)
+        init_latents, _, _ = tr_get_noise(shape, keys_path, from_file=key_id, generator=g_i)
+        init_latents = init_latents.to(device=device, dtype=torch.float64)
+
+        image, _, _ = generate(
+            prompt=prompt, init_latents=init_latents, num_inference_steps=INF_STEPS, solver_order=1, pipe=pipe,
+        )
+        images.append(image)
+
+        if out_path is not None: image.save(os.path.join(out_path, f"{i}.png"))
+
+        if on_progress is not None: on_progress(i + 1, len(prompts))
+
+    return images, key_id
+
+
+def detectTreeRing(in_path: str, model_id: str, images: list[Any], key_id: str, *, keys_path: str | None = None,
+    on_progress: Callable[[int, int], None] | None = None) -> list[tuple[float, bool]]:
+    """Detect Tree-Ring watermark on each image (distance in FFT ring vs key; threshold in baseline).
+
+    `keys_path` defaults to `{in_path}/treering_keys`.
+
+    ## File:
+    - `{keys_path or in_path/treering_keys}/{key_id}.pkl`
+    - model: `{in_path}/models/`
+
+    ## Return:
+    - list of `(distance, detected)` per image, same order as `tr_detect`
+
+    **Original Code:** `PRC/src/baseline/treering_watermark.py`, in `tr_detect()`
+    """
+
+    from PRC.src.baseline.treering_watermark import tr_detect
+
+    if not images: return []
+
+    if keys_path is None: keys_path = os.path.join(in_path, "treering_keys")
+
+    key_file = os.path.join(keys_path, f"{key_id}.pkl")
+    if not os.path.isfile(key_file): raise FileNotFoundError(f"TreeRing key not found: {key_file}")
+
+    model_cache_dir = os.path.join(in_path, "models")
+    pipe = preparePRC(model_cache_dir, model_id, allow_download=False)
+
+    results: list[tuple[float, bool]] = []
+    for i, img in enumerate(images):
+
+        dist, det = tr_detect(img, pipe, keys_path, key_id)
+        results.append((dist, det))
         if on_progress is not None: on_progress(i + 1, len(images))
 
     return results
@@ -473,18 +640,26 @@ def applyWaterLo(images: list[Any], in_path: str, alpha: float = 0.005,
 
             chunk = images[start : min(start + batch_size, len(images))]
 
+            t = time.perf_counter()
             batch = torch.stack([tfm(im.convert("RGB")) for im in chunk], dim=0)
             size = ([im.size[0] for im in chunk], [im.size[1] for im in chunk])
+            _timing_add("WL_apply_batch_pre", time.perf_counter() - t)
+
+            t = time.perf_counter()
             croped = forward_watermark(models, batch, size, device, alpha)
+            _timing_add("WL_apply_batch", time.perf_counter() - t)
 
-            for i, t in enumerate(croped):
+            t = time.perf_counter()
+            for i, c in enumerate(croped):
 
-                out_image = to_pil(t.cpu())
+                out_image = to_pil(c.cpu())
                 out_images.append(out_image)
 
                 if out_path is not None: out_image.save(os.path.join(out_path, f"{start + i}.png"))
 
                 if on_progress is not None: on_progress(start + i + 1, len(images))
+
+            _timing_add("WL_apply_batch_post", time.perf_counter() - t)
 
     return out_images
 
@@ -514,8 +689,7 @@ def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
     from WaterLo.src.jpeg import add_jpeg_noise
     from WaterLo.src.utils import rgb_to_ycbcr
 
-    if not images:
-        return [], []
+    if not images: return [], []
     if batch_size <= 0: raise ValueError(f"batch_size={batch_size} is not positive")
 
     models, device = _prepareWaterLo(os.path.join(in_path, "models"))
@@ -533,13 +707,20 @@ def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
         for start in range(0, len(images), batch_size):
 
             chunk = images[start : min(start + batch_size, len(images))]
+
+            t = time.perf_counter()
             batch = torch.stack([tfm(im.convert("RGB")) for im in chunk], dim=0).to(device)
 
             if compression <= 100: batch = add_jpeg_noise(batch, device, compression)
 
+            _timing_add("WL_detect_batch_pre", time.perf_counter() - t)
+
+            t = time.perf_counter()
             bob_preds = models.B(batch)
             pred: torch.Tensor = interpolate(bob_preds, size=batch.shape[2:], mode="nearest")
+            _timing_add("WL_detect_batch", time.perf_counter() - t)
 
+            t = time.perf_counter()
             for i in range(batch.shape[0]):
 
                 preds.append(pred[i, 0].detach().float().cpu().numpy().copy())
@@ -553,5 +734,7 @@ def detectWaterLo(images: list[Any], in_path: str, compression: int = 101,
 
                 if out_path is not None: result.save(os.path.join(out_path, f"{start + i}.png"))
                 if on_progress is not None: on_progress(start + i + 1, len(images))
+
+            _timing_add("WL_detect_batch_post", time.perf_counter() - t)
 
     return maps, preds

@@ -524,9 +524,10 @@ def write_timing_block(title: str, meta: dict[str, object], stats: dict[str, dic
 
 if __name__ == "__main__":
 
-    NUM_IMAGES = 500
+    NUM_IMAGES = 1
     KEY_ID = "45d7645463e6b61b8f0695b9284fac92"
     TREERING_KEY_ID = "8c86b304d80dd8c03a1390a49d25abae"
+
 
     # # Generate test image sets
     # ALPHAS = [0.002, 0.005, 0.01, 0.05]
@@ -555,12 +556,12 @@ if __name__ == "__main__":
     #     generateWaterLoImages(alpha, NUM_IMAGES, os.path.join(EXP_DIR, "prc"))
 
 
-    # Generate Tree-Ring images
-    generateTreeRingImages(NUM_IMAGES, TREERING_KEY_ID)
+    # # Generate Tree-Ring images
+    # generateTreeRingImages(NUM_IMAGES, TREERING_KEY_ID)
 
 
-    # PRC evaluation under JPEG compression
-    JPEG_QUALITIES = [100, 70, 40]
+    # # PRC evaluation under JPEG compression
+    # JPEG_QUALITIES = [100, 70, 40]
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.002"), "PRC_WL_0.002", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", JPEG_QUALITIES)
@@ -569,8 +570,8 @@ if __name__ == "__main__":
 
     # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "treering"), "TR", JPEG_QUALITIES)
 
-    # PRC evaluation under Gaussian blur
-    BLUR_RADII = [1, 2, 4]
+    # # PRC evaluation under Gaussian blur
+    # BLUR_RADII = [1, 2, 4]
     # prc_blur_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", BLUR_RADII)
     # prc_blur_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", BLUR_RADII)
     # prc_blur_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", BLUR_RADII)
@@ -611,15 +612,27 @@ if __name__ == "__main__":
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", SIDE_RATIOS)
 
 
-    # # PRC evaluation on plain images
+    # # PRC & Tree-Ring evaluation on plain images
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
+    # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
 
 
     # # WaterLo threshold - F1 / IoU curve
     # WL_THRESHOLDS = [round(x, 2) for x in np.linspace(0.05, 0.95, 19)]
     # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), f"PLAIN TH={th}", 0.3, threshold=th)
+    # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.002"), f"PLAIN_WL_0.002 TH={th}", 0.3, threshold=th)
+    # for th in WL_THRESHOLDS:
     #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.005"), f"PLAIN_WL_0.005 TH={th}", 0.3, threshold=th)
-
+    # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.01"), f"PLAIN_WL_0.01 TH={th}", 0.3, threshold=th)
+    # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.05"), f"PLAIN_WL_0.05 TH={th}", 0.3, threshold=th)
+    # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.1"), f"PLAIN_WL_0.1 TH={th}", 0.3, threshold=th)
+    # for th in WL_THRESHOLDS:
+    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.2"), f"PLAIN_WL_0.2 TH={th}", 0.3, threshold=th)
 
     # # Timing evaluation
     # SKIP = 1

@@ -83,7 +83,7 @@ def _load_images_from_request(field: str = "images") -> tuple[list[Any], str | N
 
 
 def _run_generate_job(job_id: str, sid: str, model_id: str, prompts: list[str], use_prc: bool, use_waterlo: bool,
-    alpha: float, key_id: str) -> None:
+    alpha: float, key_id: str, messages: list[str | None] | None = None) -> None:
 
     def on_prc(current: int, total: int) -> None:
 
@@ -97,7 +97,20 @@ def _run_generate_job(job_id: str, sid: str, model_id: str, prompts: list[str], 
 
         try:
 
-            images = applyPRC(BASE_DIR, key_id, model_id, prompts, watermark=use_prc, out_path=None, on_progress=on_prc)
+            prc_message_fn = None
+            if use_prc and messages is not None:
+
+                msgs = list(messages)
+
+                def prc_message_fn(i: int) -> str | None:
+
+                    m = msgs[i]
+                    if m is None: return None
+                    t = str(m).strip()
+                    return t if t else None
+
+            images = applyPRC(BASE_DIR, key_id, model_id, prompts, watermark=use_prc, out_path=None,
+                message_fn=prc_message_fn, on_progress=on_prc)
 
             if use_waterlo:
 
@@ -168,7 +181,7 @@ def _run_decode_waterlo_job(job_id: str, sid: str, pil_images: list[Any]) -> Non
 
 
 def _run_generate_job_test(job_id: str, sid: str, model_id: str, prompts: list[str], use_prc: bool, use_waterlo: bool,
-    alpha: float, key_id: str) -> None:
+    alpha: float, key_id: str, messages: list[str | None] | None = None) -> None:
 
     n = len(prompts)
     total = max(1, n)
@@ -357,7 +370,10 @@ def handle_generate_by_prompts():
         - if `use_prc` is `True`: non-empty `string`
         - if `use_prc` is `False`: ignored
     - (optional) `alpha`: `float` in (0, 1], default = 0.005
-    
+    - (optional) `messages`:
+        - if `use_prc` is `True`: `array` with `len(prompts)` of `string` or `null`
+        - if `use_prc` is `False`: ignored
+
     ## Return:
     - `202 Accepted`: `{"job_id": str, "status": "accepted"}`
 
@@ -383,7 +399,8 @@ def handle_generate_by_prompts():
             "use_prc": {"type": "boolean"},
             "use_waterlo": {"type": "boolean"},
             "key_id": {"type": ["string", "null"]},
-            "alpha": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+            "alpha": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            "messages": {"type": ["array", "null"], "items": {"type": ["string", "null"]}}
         },
         "allOf": [
             {
@@ -405,6 +422,9 @@ def handle_generate_by_prompts():
     use_waterlo = data["use_waterlo"]
     alpha = float(data.get("alpha", 0.005))
 
+    messages = data.get("messages")
+    if messages is not None and len(messages) != len(prompts): return jsonify({"error": "`messages` length unmatched"}), 400
+
     if use_prc: key_id = str(data["key_id"])
     else: key_id = ""
 
@@ -415,7 +435,7 @@ def handle_generate_by_prompts():
     threading.Thread(target=run, daemon=True,
         kwargs= {
             "job_id": job_id, "sid": sid, "model_id": model_id, "prompts": list(prompts),
-            "use_prc": use_prc, "use_waterlo": use_waterlo, "alpha": alpha, "key_id": key_id
+            "use_prc": use_prc, "use_waterlo": use_waterlo, "alpha": alpha, "key_id": key_id, "messages": messages
         }
     ).start()
 

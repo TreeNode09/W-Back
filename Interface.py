@@ -218,13 +218,13 @@ def decodeBitsToText(bits: str | None) -> str | None:
 
 
 def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
-    out_path: str | None = None, watermark: bool = True, message_fn: Callable[[int], str] | None = None,
+    out_path: str | None = None, watermark: bool = True, message_fn: Callable[[int], str | None] | None = None,
     on_progress: Callable[[int, int], None] | None = None) -> list[Any]:
     """Apply PRC watermark by generating images from watermarked latents, or plain SD when `watermark` is False.
     Only called when key, model and prompts are ready (key is ignored when `watermark` is False).
     Save generated images if `out_path` is given.
 
-    `message_fn` maps image index to an ASCII payload string, ignored when `watermark` is `False`.
+    `message_fn` maps image index to an ASCII payload string (or `None`), ignored when `watermark` is `False`.
     `on_progress` is another callback: `(current: int, total: int) -> None`
 
     ## File:
@@ -277,8 +277,11 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
             message = None
             if message_fn is not None:
 
-                message_text = str(message_fn(i))
-                message = _text_to_payload_bits(message_text, max_message_bits)
+                raw = message_fn(i)
+                if raw is not None:
+
+                    message_text = str(raw).strip()
+                    if message_text: message = _text_to_payload_bits(message_text, max_message_bits)
 
             t = time.perf_counter()
             prc_codeword = Encode(encoding_key, message=message)

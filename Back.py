@@ -4,6 +4,7 @@ import os
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from PIL import Image
@@ -24,10 +25,22 @@ PROMPT_DATASET = "Gustavosta/Stable-Diffusion-Prompts"
 BATCH_SIZE = 8
 
 TESTING = True  # when enabled, will use fixed images instead of real models and prompts
+PRC_DECODE_BITS_TEST = "".join(str(b) for b in text_to_payload_bits("PRC and WaterLo watermarking, with Stable Diffusion 2.1", 512))
+
+# Serialize PyTorch / CUDA work across daemon threads
+_TORCH_INFER_LOCK = threading.Lock()
 
 
-def _get_job_id() -> str:
-    return secrets.token_hex(6)  # 12 hex chars
+def _spawn_torch_job(target: Callable[..., None], **kwargs: Any) -> None:
+
+    def wrapped() -> None:
+
+        with _TORCH_INFER_LOCK: target(**kwargs)
+
+    threading.Thread(target=wrapped, daemon=True).start()
+
+
+def _get_job_id() -> str: return secrets.token_hex(6)  # 12 hex chars
 
 
 def _load_n_images_from_test(n: int) -> list[Any]:
@@ -247,7 +260,7 @@ def _run_decode_prc_job_test(job_id: str, sid: str, pil_images: list[Any], key_i
                 if current <= total: time.sleep(1.0)
 
             _load_n_images_from_test(n)
-            payload = [{"detect": True, "decode_bits": "0" * 64} for _ in range(n)]
+            payload = [{"detect": True, "decode_bits": PRC_DECODE_BITS_TEST} for _ in range(n)]
             socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
 
         except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
@@ -432,12 +445,8 @@ def handle_generate_by_prompts():
     job_id = _get_job_id()
 
     run = _run_generate_job_test if TESTING else _run_generate_job
-    threading.Thread(target=run, daemon=True,
-        kwargs= {
-            "job_id": job_id, "sid": sid, "model_id": model_id, "prompts": list(prompts),
-            "use_prc": use_prc, "use_waterlo": use_waterlo, "alpha": alpha, "key_id": key_id, "messages": messages
-        }
-    ).start()
+    _spawn_torch_job(run, job_id=job_id, sid=sid, model_id=model_id, prompts=list(prompts),
+        use_prc=use_prc, use_waterlo=use_waterlo, alpha=alpha, key_id=key_id, messages=messages)
 
     return jsonify({"job_id": job_id, "status": "accepted"}), 202
 
@@ -478,11 +487,7 @@ def handle_generate_by_images():
 
     job_id = _get_job_id()
     run = _run_waterlo_images_job_test if TESTING else _run_waterlo_images_job
-    threading.Thread(target=run, daemon=True,
-        kwargs={
-            "job_id": job_id, "sid": sid, "pil_images": loaded, "alpha": alpha
-        }
-    ).start()
+    _spawn_torch_job(run, job_id=job_id, sid=sid, pil_images=loaded, alpha=alpha)
 
     return jsonify({"job_id": job_id, "status": "accepted"}), 202
 
@@ -544,20 +549,12 @@ def handle_decode():
     if use_prc:
 
         run = _run_decode_prc_job_test if TESTING else _run_decode_prc_job
-        threading.Thread(target=run, daemon=True,
-            kwargs={
-                "job_id": job_id, "sid": sid, "pil_images": pil_prc, "key_id": key_id, "model_id": model_id
-            }
-        ).start()
+        _spawn_torch_job(run, job_id=job_id, sid=sid, pil_images=pil_prc, key_id=key_id, model_id=model_id)
 
     if use_waterlo:
 
         run = _run_decode_waterlo_job_test if TESTING else _run_decode_waterlo_job
-        threading.Thread(target=run, daemon=True,
-            kwargs={
-                "job_id": job_id, "sid": sid, "pil_images": pil_wl
-            }
-        ).start()
+        _spawn_torch_job(run, job_id=job_id, sid=sid, pil_images=pil_wl)
 
     return jsonify({"job_id": job_id, "status": "accepted"}), 202
 

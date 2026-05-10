@@ -187,7 +187,7 @@ def _seed_everything(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-def _text_to_payload_bits(text: str, capacity_bits: int) -> list[int]:
+def text_to_payload_bits(text: str, capacity_bits: int) -> list[int]:
 
     if capacity_bits % 8 != 0: raise ValueError(f"capacity_bits={capacity_bits} is not byte-aligned")
 
@@ -281,7 +281,7 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
                 if raw is not None:
 
                     message_text = str(raw).strip()
-                    if message_text: message = _text_to_payload_bits(message_text, max_message_bits)
+                    if message_text: message = text_to_payload_bits(message_text, max_message_bits)
 
             t = time.perf_counter()
             prc_codeword = Encode(encoding_key, message=message)

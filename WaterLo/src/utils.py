@@ -24,9 +24,8 @@ class Models:
         self.B.eval()
 
     def save(self, path=""):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        torch.save(self.G.state_dict(), os.path.join(path, "G.pt", map_location=torch.device(device)))
-        torch.save(self.B.state_dict(), os.path.join(path, "B.pt", map_location=torch.device(device)))
+        torch.save(self.G.state_dict(), os.path.join(path, "G.pt"))
+        torch.save(self.B.state_dict(), os.path.join(path, "B.pt"))
 
     def load(self, path=""):
         device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -14,8 +14,8 @@ from WaterLo.src.loss import GeneratorLoss, BobLoss
 from WaterLo.src.utils import Models, Losses, Optimizers
 from random import seed
 
-from jpeg import add_jpeg_noise
-from utils import crop_padding, mask_image, imsave
+from WaterLo.src.jpeg import add_jpeg_noise
+from WaterLo.src.utils import crop_padding, mask_image, imsave
 
 
 class LEARNING_STEP(Enum):

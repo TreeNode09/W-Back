@@ -11,8 +11,8 @@ from sklearn.metrics import roc_auc_score
 
 from Interface import *
 
-BASE_DIR = r"D:/W-Back/Data"
-# BASE_DIR = r"/workspace/W-Back/Data"
+# BASE_DIR = r"D:/W-Back/Data"
+BASE_DIR = r"/workspace/W-Back/Data"
 EXP_DIR = os.path.join(BASE_DIR, "exp")
 
 PROMPTS_FILE = os.path.join(EXP_DIR, "prompts.json")
@@ -524,13 +524,13 @@ def write_timing_block(title: str, meta: dict[str, object], stats: dict[str, dic
 
 if __name__ == "__main__":
 
-    NUM_IMAGES = 1
-    KEY_ID = "45d7645463e6b61b8f0695b9284fac92"
-    TREERING_KEY_ID = "8c86b304d80dd8c03a1390a49d25abae"
+    NUM_IMAGES = 500
+    KEY_ID = "074ee762bc798c0ada39d9d363ccba06"
+    TREERING_KEY_ID = "7ba21a512017c983d31e636bb9a0a348"
 
 
     # # Generate test image sets
-    # ALPHAS = [0.002, 0.005, 0.01, 0.05]
+    # ALPHAS = [0.002, 0.005, 0.01, 0.05, 0.1, 0.2]
 
     # prompts = preparePrompts(NUM_IMAGES, seed=42)
     # print(f"Prepared {len(prompts)} prompt(s) at {PROMPTS_FILE}")
@@ -563,10 +563,11 @@ if __name__ == "__main__":
     # # PRC evaluation under JPEG compression
     # JPEG_QUALITIES = [100, 70, 40]
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", JPEG_QUALITIES)
-    # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.002"), "PRC_WL_0.002", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.05"), "PRC_WL_0.05", JPEG_QUALITIES)
+    # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.1"), "PRC_WL_0.1", JPEG_QUALITIES)
+    # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.2"), "PRC_WL_0.2", JPEG_QUALITIES)
 
     # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "treering"), "TR", JPEG_QUALITIES)
 
@@ -581,8 +582,9 @@ if __name__ == "__main__":
 
     # treering_blur_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "treering"), "TR", BLUR_RADII)
 
-    # # PRC evaluation with plain images in FID
+    # # PRC / Tree-Ring evaluation with plain images in FID
     # fid_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), os.path.join(EXP_DIR, "prc"), "FID plain vs prc")
+    # fid_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), os.path.join(EXP_DIR, "treering"), "FID plain vs TreeRing")
 
 
     # # WaterLo evaluation of image quality
@@ -606,33 +608,23 @@ if __name__ == "__main__":
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.002"), "PLAIN_WL_0.002", SIDE_RATIOS)
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.005"), "PLAIN_WL_0.005", SIDE_RATIOS)
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.01"), "PLAIN_WL_0.01", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.05"), "PLAIN_WL_0.05", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.1"), "PLAIN_WL_0.1", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.2"), "PLAIN_WL_0.2", SIDE_RATIOS)
+    
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", SIDE_RATIOS)
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.002"), "PRC_WL_0.002", SIDE_RATIOS)
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", SIDE_RATIOS)
     # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.05"), "PRC_WL_0.05", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.1"), "PRC_WL_0.1", SIDE_RATIOS)
+    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.2"), "PRC_WL_0.1", SIDE_RATIOS)
 
 
     # # PRC & Tree-Ring evaluation on plain images
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
     # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
-
-
-    # # WaterLo threshold - F1 / IoU curve
-    # WL_THRESHOLDS = [round(x, 2) for x in np.linspace(0.05, 0.95, 19)]
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), f"PLAIN TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.002"), f"PLAIN_WL_0.002 TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.005"), f"PLAIN_WL_0.005 TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.01"), f"PLAIN_WL_0.01 TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.05"), f"PLAIN_WL_0.05 TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.1"), f"PLAIN_WL_0.1 TH={th}", 0.3, threshold=th)
-    # for th in WL_THRESHOLDS:
-    #     waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.2"), f"PLAIN_WL_0.2 TH={th}", 0.3, threshold=th)
+    
 
     # # Timing evaluation
     # SKIP = 1

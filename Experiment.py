@@ -139,7 +139,8 @@ def generatePRCImages(num: int, watermark: bool, key_id: str | None = None) -> N
 
 
 def detectPRCImages(key_id: str, num_images: int, images_dir: str, *,
-    jpeg_quality: int | None = None, blur_radius: float | None = None) -> dict[str, float]:
+    jpeg_quality: int | None = None, blur_radius: float | None = None,
+    decoder_inv_steps: int | None = 20) -> dict[str, float | None]:
 
     images = load_sorted_rgb_images(images_dir, num_images)
 
@@ -147,7 +148,11 @@ def detectPRCImages(key_id: str, num_images: int, images_dir: str, *,
 
     if jpeg_quality is not None: images = compress_images_jpeg(images, jpeg_quality)
 
-    results = decodePRC(BASE_DIR, key_id, MODEL_ID, images, on_progress=make_progress_logger("decode_prc"))
+    results = decodePRC(
+        BASE_DIR, key_id, MODEL_ID, images,
+        decoder_inv_steps=decoder_inv_steps,
+        on_progress=make_progress_logger("decode_prc"),
+    )
 
     detect_acc = sum(1 for detect, _ in results if detect) / len(results)
 
@@ -167,16 +172,56 @@ def detectPRCImages(key_id: str, num_images: int, images_dir: str, *,
     decode_acc_all = decode_hits / len(results)
     decode_acc_valid = (decode_hits / decode_valid) if decode_valid > 0 else 0.0
 
-    metrics = {
+    metrics: dict[str, float | None] = {
         "detect_accuracy": detect_acc,
         "decode_accuracy_all": decode_acc_all,
         "decode_accuracy_valid": decode_acc_valid,
         "decode_valid_rate": (decode_valid / len(results)) if results else 0.0,
+        "decoder_inv_steps": float(decoder_inv_steps) if decoder_inv_steps is not None else None,
     }
 
     print(metrics)
 
     return metrics
+
+
+def prc_decoder_inv_eval(key_id: str, num_images: int, images_dir: str, title: str,
+    decoder_inv_steps_list: list[int | None], *, jpeg_quality: int | None = None,
+    skip_first: int = 1,
+) -> dict[str, dict[str, object]]:
+
+    q_label = "none" if jpeg_quality is None else str(jpeg_quality)
+    block_lines = [
+        "", "=" * 72,
+        f"{title} PRC decoder_inv_steps | {time.strftime('%m-%d %H:%M')}",
+        f"steps={decoder_inv_steps_list} jpeg_quality={q_label} n={num_images} skip_first={skip_first}", ""
+    ]
+
+    all_rows: dict[str, dict[str, object]] = {}
+    for steps in decoder_inv_steps_list:
+
+        steps_label = "none" if steps is None else str(steps)
+        print(f"\n=== PRC decoder_inv_steps={steps_label} jpeg={q_label} ===\n")
+
+        clear_timing_stats()
+        metrics = detectPRCImages(
+            key_id, num_images, images_dir,
+            jpeg_quality=jpeg_quality, decoder_inv_steps=steps,
+        )
+        stats = get_timing_stats(skip_first=skip_first)
+
+        row: dict[str, object] = {
+            "jpeg_quality": jpeg_quality,
+            "metrics": metrics,
+            "timing": stats,
+        }
+        all_rows[steps_label] = row
+        block_lines.append(f"steps={steps_label} {json.dumps(row, ensure_ascii=False)}")
+
+    block_lines.append("=" * 72)
+    with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block_lines))
+
+    return all_rows
 
 
 def generateWaterLoImages(alpha: float, num: int, in_path: str) -> None:
@@ -668,7 +713,16 @@ if __name__ == "__main__":
     # # PRC & Tree-Ring false-positive check on plain images (no JPEG)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
     # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
-    
+
+
+    # # PRC decoder_inv_steps sweep (accuracy + timing under JPEG). Needs exp/prc; None = disable decoder_inv.
+    # SKIP = 1
+    # DECODER_INV_STEPS = [None, 5, 10, 20, 50]
+    # prc_decoder_inv_eval(
+    #     KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC",
+    #     DECODER_INV_STEPS, jpeg_quality=40, skip_first=SKIP,
+    # )
+
 
     # # Timing evaluation
     # SKIP = 1

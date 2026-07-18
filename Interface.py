@@ -310,11 +310,12 @@ def applyPRC(in_path: str, key_id: str, model_id: str, prompts: list[str],
 
 
 def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
-    inf_steps: int = 50, decoder_inv_steps: int = 20,
+    inf_steps: int = 50, decoder_inv_steps: int | None = 20,
     on_progress: Callable[[int, int], None] | None = None) -> list[tuple[bool, str | None]]:
     """Detect / decode PRC watermark on a list of images.
 
-    Reduce `decoder_inv_steps` to speed up processing.
+    `decoder_inv_steps=None` disables decoder inversion (`exact_inversion` uses VAE encode).
+    Reduce `decoder_inv_steps` to speed up processing when decoder inversion is enabled.
 
     `on_progress` is a callback: `(current: int, total: int) -> None`
 
@@ -333,6 +334,9 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     from PRC.inversion import exact_inversion
 
     if not images: return []
+    if decoder_inv_steps is not None and decoder_inv_steps <= 0:
+        
+        raise ValueError(f"decoder_inv_steps={decoder_inv_steps} must be positive or None")
 
     key_file = os.path.join(in_path, "keys", f"{key_id}.pkl")
     if not os.path.exists(key_file): raise FileNotFoundError(f"Key not found: {key_file}")
@@ -341,12 +345,20 @@ def decodePRC(in_path: str, key_id: str, model_id: str, images: list[Any], *,
     model_cache_dir = os.path.join(in_path, "models")
     pipe = preparePRC(model_cache_dir, model_id, allow_download=False)
 
+    decoder_inv = decoder_inv_steps is not None
+    # When decoder_inv is False, decoder_inv_steps is ignored by exact_inversion.
+    inv_kwargs: dict = {"decoder_inv": decoder_inv}
+    if decoder_inv:
+        inv_kwargs["decoder_inv_steps"] = decoder_inv_steps
+
     results: list[tuple[bool, str | None]] = []
     for i, img in enumerate(images):
 
         t = time.perf_counter()
-        reversed_latents: torch.Tensor = exact_inversion(img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, 
-            pipe=pipe, decoder_inv_steps=decoder_inv_steps)
+        reversed_latents: torch.Tensor = exact_inversion(
+            img, prompt="", test_num_inference_steps=inf_steps, inv_order=0, pipe=pipe,
+            **inv_kwargs,
+        )
         _timing_add("SD_inversion", time.perf_counter() - t)
 
         t = time.perf_counter()

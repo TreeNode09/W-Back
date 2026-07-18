@@ -232,23 +232,25 @@ def detectTreeRingImages(key_id: str, num_images: int, images_dir: str, *, keys_
     return metrics
 
 
-def treering_jpeg_eval(key_id: str, num_images: int, images_dir: str, title: str, jpeg_qualities: list[int], *,
-    keys_path: str | None = None) -> dict[int, dict[str, float]]:
+def treering_jpeg_eval(key_id: str, num_images: int, images_dir: str, title: str,
+    jpeg_qualities: list[int | None], *, keys_path: str | None = None,
+) -> dict[int | None, dict[str, float]]:
 
     block_lines = [
         "", "=" * 72, f"{title} TreeRing under JPEG | {time.strftime('%m-%d %H:%M')}",
         f"qualities={jpeg_qualities}", ""
     ]
 
-    all_metrics: dict[int, dict[str, float]] = {}
+    all_metrics: dict[int | None, dict[str, float]] = {}
     for q in jpeg_qualities:
 
-        print(f"\n=== TreeRing JPEG quality={q} ===\n")
+        q_label = "none" if q is None else str(q)
+        print(f"\n=== TreeRing JPEG quality={q_label} ===\n")
 
         m = detectTreeRingImages(key_id, num_images, images_dir, keys_path=keys_path, jpeg_quality=q)
 
         all_metrics[q] = m
-        block_lines.append(f"q={q} {json.dumps(m, ensure_ascii=False)}")
+        block_lines.append(f"q={q_label} {json.dumps(m, ensure_ascii=False)}")
 
     block_lines.append("=" * 72)
     with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block_lines))
@@ -278,19 +280,23 @@ def treering_blur_eval(key_id: str, num_images: int, images_dir: str, title: str
 
 
 def prc_jpeg_eval(key_id: str, num_images: int, images_dir: str, title: str,
-    jpeg_qualities: list[int]) -> dict[int, dict[str, float]]:
+    jpeg_qualities: list[int | None]) -> dict[int | None, dict[str, float]]:
 
-    block_lines = ["", "=" * 72, f"{title} under JPEG | {time.strftime('%m-%d %H:%M')}", f"qualities={jpeg_qualities}", ""]
+    block_lines = [
+        "", "=" * 72, f"{title} under JPEG | {time.strftime('%m-%d %H:%M')}",
+        f"qualities={jpeg_qualities}", ""
+    ]
 
-    all_metrics: dict[int, dict[str, float]] = {}
+    all_metrics: dict[int | None, dict[str, float]] = {}
     for q in jpeg_qualities:
 
-        print(f"\n=== JPEG quality={q} ===\n")
+        q_label = "none" if q is None else str(q)
+        print(f"\n=== JPEG quality={q_label} ===\n")
 
         m = detectPRCImages(key_id, num_images, images_dir, jpeg_quality=q)
 
         all_metrics[q] = m
-        block_lines.append(f"q={q} {json.dumps(m, ensure_ascii=False)}")
+        block_lines.append(f"q={q_label} {json.dumps(m, ensure_ascii=False)}")
 
     block_lines.append("=" * 72)
     block_text = "\n".join(block_lines)
@@ -435,7 +441,11 @@ def prc_blur_eval(key_id: str, num_images: int, images_dir: str, title: str,
 
 
 def waterlo_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float, *,
-    threshold: float = 0.5) -> dict[str, float]:
+    threshold: float = 0.5, jpeg_quality: int | None = None) -> dict[str, float | None]:
+    """Noise-rect tamper eval for WaterLo.
+
+    `jpeg_quality=None` means no JPEG; otherwise compress after the rect attack.
+    """
 
     originals = load_sorted_rgb_images(images_dir, num_images)
 
@@ -445,6 +455,9 @@ def waterlo_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: 
         atk, gt = attack_image_noise_rect(im, side_ratio=side_ratio, seed=42+i)
         attacked.append(atk)
         gt_masks.append(gt)
+
+    if jpeg_quality is not None:
+        attacked = compress_images_jpeg(attacked, jpeg_quality)
 
     maps, preds = detectWaterLo(
         attacked, BASE_DIR, on_progress=make_progress_logger("detect_waterlo_rect"),
@@ -486,10 +499,11 @@ def waterlo_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: 
 
         aucs.append(auc)
 
-    metrics = {
+    metrics: dict[str, float | None] = {
         "count": float(len(preds)),
         "side_ratio": float(side_ratio),
         "threshold": float(threshold),
+        "jpeg_quality": float(jpeg_quality) if jpeg_quality is not None else None,
         "iou": float(np.mean(ious)) if ious else 0.0,
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "auc": float(np.mean(aucs)) if aucs else 0.5
@@ -505,6 +519,34 @@ def waterlo_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: 
     with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block))
 
     return metrics
+
+
+def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float,
+    jpeg_qualities: list[int | None], *, threshold: float = 0.5,
+) -> dict[int | None, dict[str, float | None]]:
+    """WaterLo noise-rect detection under multiple JPEG qualities (`None` = no compression)."""
+
+    block_lines = [
+        "", "=" * 72, f"{title} WaterLo Noise-Rect under JPEG | {time.strftime('%m-%d %H:%M')}",
+        f"qualities={jpeg_qualities} side_ratio={side_ratio} threshold={threshold}", ""
+    ]
+
+    all_metrics: dict[int | None, dict[str, float | None]] = {}
+    for q in jpeg_qualities:
+
+        q_label = "none" if q is None else str(q)
+        print(f"\n=== {title} WaterLo JPEG quality={q_label} ===\n")
+        m = waterlo_rect_eval(
+            num_images, images_dir, f"{title} q={q_label}", side_ratio,
+            threshold=threshold, jpeg_quality=q,
+        )
+        all_metrics[q] = m
+        block_lines.append(f"q={q_label} {json.dumps(m, ensure_ascii=False)}")
+
+    block_lines.append("=" * 72)
+    with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block_lines))
+
+    return all_metrics
 
 
 def write_timing_block(title: str, meta: dict[str, object], stats: dict[str, dict[str, float]]) -> None:
@@ -560,8 +602,8 @@ if __name__ == "__main__":
     # generateTreeRingImages(NUM_IMAGES, TREERING_KEY_ID)
 
 
-    # # PRC evaluation under JPEG compression
-    # JPEG_QUALITIES = [100, 70, 40]
+    # # PRC evaluation under JPEG compression (`None` = no JPEG; not the same as quality=100)
+    # JPEG_QUALITIES = [None, 70, 40]
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", JPEG_QUALITIES)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", JPEG_QUALITIES)
@@ -602,28 +644,30 @@ if __name__ == "__main__":
     # psnr_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc"), os.path.join(EXP_DIR, "prc_wl_0.2"), "PRC vs WL_0.2")
 
 
-    # # WaterLo evaluation after applying noise rectangle (optional: ``jpeg_quality=70`` etc.; ``101`` = no JPEG in detector)
+    # # WaterLo noise-rect (+ JPEG). `None` = no compression.
     # SIDE_RATIOS = 0.3
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.002"), "PLAIN_WL_0.002", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.005"), "PLAIN_WL_0.005", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.01"), "PLAIN_WL_0.01", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.05"), "PLAIN_WL_0.05", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.1"), "PLAIN_WL_0.1", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.2"), "PLAIN_WL_0.2", SIDE_RATIOS)
-    
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.002"), "PRC_WL_0.002", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.05"), "PRC_WL_0.05", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.1"), "PRC_WL_0.1", SIDE_RATIOS)
-    # waterlo_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.2"), "PRC_WL_0.1", SIDE_RATIOS)
+    # JPEG_QUALITIES = [None, 70, 40]
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.002"), "PLAIN_WL_0.002", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.005"), "PLAIN_WL_0.005", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.01"), "PLAIN_WL_0.01", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.05"), "PLAIN_WL_0.05", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.1"), "PLAIN_WL_0.1", SIDE_RATIOS, JPEG_QUALITIES)
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "plain_wl_0.2"), "PLAIN_WL_0.2", SIDE_RATIOS, JPEG_QUALITIES)
+
+    # # PRC series: no-JPEG only (joint interference); skip full JPEG grid if close to plain
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.002"), "PRC_WL_0.002", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.005"), "PRC_WL_0.005", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.01"), "PRC_WL_0.01", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.05"), "PRC_WL_0.05", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.1"), "PRC_WL_0.1", SIDE_RATIOS, [None])
+    # waterlo_jpeg_rect_eval(NUM_IMAGES, os.path.join(EXP_DIR, "prc_wl_0.2"), "PRC_WL_0.2", SIDE_RATIOS, [None])
 
 
-    # # PRC & Tree-Ring evaluation on plain images
-    # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
-    # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [100])
+    # # PRC & Tree-Ring false-positive check on plain images (no JPEG)
+    # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
+    # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
     
 
     # # Timing evaluation
@@ -662,4 +706,4 @@ if __name__ == "__main__":
     # clear_timing_stats()
     # detectWaterLo(wl_images, BASE_DIR)
     # stats = get_timing_stats(skip_first=SKIP)
-    # write_timing_block("WaterLo detect", {"compression": 101, "n": len(wl_images), "skip": SKIP}, stats)
+    # write_timing_block("WaterLo detect", {"jpeg": None, "n": len(wl_images), "skip": SKIP}, stats)

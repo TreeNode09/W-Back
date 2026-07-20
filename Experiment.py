@@ -3,7 +3,6 @@ import random
 import json
 import time
 import io
-import cv2
 from PIL import Image, ImageFilter
 import math
 import numpy as np
@@ -183,45 +182,6 @@ def detectPRCImages(key_id: str, num_images: int, images_dir: str, *,
     print(metrics)
 
     return metrics
-
-
-def prc_decoder_inv_eval(key_id: str, num_images: int, images_dir: str, title: str,
-    decoder_inv_steps_list: list[int | None], *, jpeg_quality: int | None = None,
-    skip_first: int = 1,
-) -> dict[str, dict[str, object]]:
-
-    q_label = "none" if jpeg_quality is None else str(jpeg_quality)
-    block_lines = [
-        "", "=" * 72,
-        f"{title} PRC decoder_inv_steps | {time.strftime('%m-%d %H:%M')}",
-        f"steps={decoder_inv_steps_list} jpeg_quality={q_label} n={num_images} skip_first={skip_first}", ""
-    ]
-
-    all_rows: dict[str, dict[str, object]] = {}
-    for steps in decoder_inv_steps_list:
-
-        steps_label = "none" if steps is None else str(steps)
-        print(f"\n=== PRC decoder_inv_steps={steps_label} jpeg={q_label} ===\n")
-
-        clear_timing_stats()
-        metrics = detectPRCImages(
-            key_id, num_images, images_dir,
-            jpeg_quality=jpeg_quality, decoder_inv_steps=steps,
-        )
-        stats = get_timing_stats(skip_first=skip_first)
-
-        row: dict[str, object] = {
-            "jpeg_quality": jpeg_quality,
-            "metrics": metrics,
-            "timing": stats,
-        }
-        all_rows[steps_label] = row
-        block_lines.append(f"steps={steps_label} {json.dumps(row, ensure_ascii=False)}")
-
-    block_lines.append("=" * 72)
-    with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block_lines))
-
-    return all_rows
 
 
 def generateWaterLoImages(alpha: float, num: int, in_path: str) -> None:
@@ -485,91 +445,18 @@ def prc_blur_eval(key_id: str, num_images: int, images_dir: str, title: str,
     return all_metrics
 
 
-def waterlo_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float, *,
-    threshold: float = 0.5, jpeg_quality: int | None = None) -> dict[str, float | None]:
-    """Noise-rect tamper eval for WaterLo.
-
-    `jpeg_quality=None` means no JPEG; otherwise compress after the rect attack.
-    """
+def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float,
+    jpeg_qualities: list[int | None], *, threshold: float = 0.5,
+) -> dict[int | None, dict[str, float | None]]:
+    """WaterLo noise-rect + optional JPEG sweep (`None` = no compression). Writes one result block."""
 
     originals = load_sorted_rgb_images(images_dir, num_images)
 
     attacked, gt_masks = [], []
     for i, im in enumerate(originals):
-
-        atk, gt = attack_image_noise_rect(im, side_ratio=side_ratio, seed=42+i)
+        atk, gt = attack_image_noise_rect(im, side_ratio=side_ratio, seed=42 + i)
         attacked.append(atk)
         gt_masks.append(gt)
-
-    if jpeg_quality is not None:
-        attacked = compress_images_jpeg(attacked, jpeg_quality)
-
-    maps, preds = detectWaterLo(
-        attacked, BASE_DIR, on_progress=make_progress_logger("detect_waterlo_rect"),
-    )
-
-    # for i, mp in enumerate(maps):
-
-    #     bgr = cv2.cvtColor(np.array(mp.convert("RGB")), cv2.COLOR_RGB2BGR)
-    #     cv2.imshow("waterlo_heatmap", bgr)
-    #     key = cv2.waitKey(0)
-    #     if key == 27: break
-
-    # cv2.destroyAllWindows()
-
-    # return
-
-    ious, f1s, aucs = [], [], []
-    for pred, gt in zip(preds, gt_masks):
-
-        score_map = np.asarray(pred, dtype=np.float32)
-        pred_mask = (score_map >= threshold).astype(np.uint8)
-        pred_b = pred_mask.astype(bool)
-        gt_b = gt.astype(bool)
-        tp = np.logical_and(pred_b, gt_b).sum()
-        fp = np.logical_and(pred_b, ~gt_b).sum()
-        fn = np.logical_and(~pred_b, gt_b).sum()
-        denom_iou = tp + fp + fn
-        iou = float(tp / denom_iou) if denom_iou > 0 else 0.0
-        denom_f1 = 2 * tp + fp + fn
-        f1 = float((2 * tp) / denom_f1) if denom_f1 > 0 else 0.0
-        ious.append(iou)
-        f1s.append(f1)
-
-        s = score_map.astype(np.float64).ravel()
-        y = gt.astype(np.uint8).ravel()
-
-        if y.any() and not y.all(): auc = float(roc_auc_score(y, s))
-        else: auc = 0.5
-
-        aucs.append(auc)
-
-    metrics: dict[str, float | None] = {
-        "count": float(len(preds)),
-        "side_ratio": float(side_ratio),
-        "threshold": float(threshold),
-        "jpeg_quality": float(jpeg_quality) if jpeg_quality is not None else None,
-        "iou": float(np.mean(ious)) if ious else 0.0,
-        "f1": float(np.mean(f1s)) if f1s else 0.0,
-        "auc": float(np.mean(aucs)) if aucs else 0.5
-    }
-    
-    print(metrics)
-
-    block = [
-        "", "=" * 72, f"{title} WaterLo Noise-Rect | {time.strftime('%m-%d %H:%M')}",
-        f"{json.dumps(metrics, ensure_ascii=False)}", "=" * 72
-    ]
-
-    with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block))
-
-    return metrics
-
-
-def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float,
-    jpeg_qualities: list[int | None], *, threshold: float = 0.5,
-) -> dict[int | None, dict[str, float | None]]:
-    """WaterLo noise-rect detection under multiple JPEG qualities (`None` = no compression)."""
 
     block_lines = [
         "", "=" * 72, f"{title} WaterLo Noise-Rect under JPEG | {time.strftime('%m-%d %H:%M')}",
@@ -581,12 +468,48 @@ def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ra
 
         q_label = "none" if q is None else str(q)
         print(f"\n=== {title} WaterLo JPEG quality={q_label} ===\n")
-        m = waterlo_rect_eval(
-            num_images, images_dir, f"{title} q={q_label}", side_ratio,
-            threshold=threshold, jpeg_quality=q,
+
+        images = attacked if q is None else compress_images_jpeg(attacked, q)
+        _, preds = detectWaterLo(
+            images, BASE_DIR, on_progress=make_progress_logger("detect_waterlo_rect"),
         )
-        all_metrics[q] = m
-        block_lines.append(f"q={q_label} {json.dumps(m, ensure_ascii=False)}")
+
+        ious, f1s, aucs = [], [], []
+        for pred, gt in zip(preds, gt_masks):
+
+            score_map = np.asarray(pred, dtype=np.float32)
+            pred_mask = (score_map >= threshold).astype(np.uint8)
+            pred_b = pred_mask.astype(bool)
+            gt_b = gt.astype(bool)
+            tp = np.logical_and(pred_b, gt_b).sum()
+            fp = np.logical_and(pred_b, ~gt_b).sum()
+            fn = np.logical_and(~pred_b, gt_b).sum()
+            denom_iou = tp + fp + fn
+            iou = float(tp / denom_iou) if denom_iou > 0 else 0.0
+            denom_f1 = 2 * tp + fp + fn
+            f1 = float((2 * tp) / denom_f1) if denom_f1 > 0 else 0.0
+            ious.append(iou)
+            f1s.append(f1)
+
+            s = score_map.astype(np.float64).ravel()
+            y = gt.astype(np.uint8).ravel()
+            if y.any() and not y.all(): auc = float(roc_auc_score(y, s))
+            else: auc = 0.5
+            aucs.append(auc)
+
+        metrics: dict[str, float | None] = {
+            "count": float(len(preds)),
+            "side_ratio": float(side_ratio),
+            "threshold": float(threshold),
+            "jpeg_quality": float(q) if q is not None else None,
+            "iou": float(np.mean(ious)) if ious else 0.0,
+            "f1": float(np.mean(f1s)) if f1s else 0.0,
+            "auc": float(np.mean(aucs)) if aucs else 0.5,
+        }
+        print(metrics)
+
+        all_metrics[q] = metrics
+        block_lines.append(f"q={q_label} {json.dumps(metrics, ensure_ascii=False)}")
 
     block_lines.append("=" * 72)
     with open(RESULT_FILE, "a", encoding="utf-8") as f: f.write("\n".join(block_lines))
@@ -713,15 +636,6 @@ if __name__ == "__main__":
     # # PRC & Tree-Ring false-positive check on plain images (no JPEG)
     # prc_jpeg_eval(KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
     # treering_jpeg_eval(TREERING_KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "plain"), "PLAIN", [None])
-
-
-    # # PRC decoder_inv_steps sweep (accuracy + timing under JPEG). Needs exp/prc; None = disable decoder_inv.
-    # SKIP = 1
-    # DECODER_INV_STEPS = [None, 5, 10, 20, 50]
-    # prc_decoder_inv_eval(
-    #     KEY_ID, NUM_IMAGES, os.path.join(EXP_DIR, "prc"), "PRC",
-    #     DECODER_INV_STEPS, jpeg_quality=40, skip_first=SKIP,
-    # )
 
 
     # # Timing evaluation

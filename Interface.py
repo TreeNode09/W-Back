@@ -144,8 +144,8 @@ def getPrompts(dataset_id: str, num: int, out_path: str | None = None) -> list[s
 
     ## File:
     - if `out_path` is given:
-        - create folder `{save_path}` if not found
-        - save `{save_path}/prompts.json`
+        - create folder `{out_path}` if not found
+        - save `{out_path}/prompts.json`
 
     ## Return:
     - `prompts`: list of gathered prompts
@@ -436,9 +436,8 @@ def applyTreeRing(in_path: str, model_id: str, prompts: list[str], *, out_path: 
         init_latents, _, _ = tr_get_noise(shape, keys_path, from_file=key_id, generator=g_i)
         init_latents = init_latents.to(device=device, dtype=torch.float64)
 
-        image, _, _ = generate(
-            prompt=prompt, init_latents=init_latents, num_inference_steps=INF_STEPS, solver_order=1, pipe=pipe,
-        )
+        image, _, _ = generate(prompt=prompt, init_latents=init_latents, num_inference_steps=INF_STEPS,
+            solver_order=1, pipe=pipe)
         images.append(image)
 
         if out_path is not None: image.save(os.path.join(out_path, f"{i}.png"))
@@ -542,10 +541,11 @@ def makeWaterLoDataset(in_path: str, out_path: str, train_ratio: float = 0.8) ->
 
 def trainWaterLo(in_path: str, out_path: str, *,
     alpha: float = 0.005, lambd: float = 4, epochs: int = 32, batch_size: int = 8, loss: str = "ssim",
-    compression: bool = False, weights_path: str | None = None) -> None:
+    compression: bool = False, jpeg_prob: float = 0.8, weights_path: str | None = None) -> None:
     """Train WaterLo models with given train and valid images.
 
     `loss` only supports `"mse"` or `"ssim"`.
+    `jpeg_prob`: probability of applying JPEG each batch when `compression=True`. 
 
     ## File:
     - load train images from `{in_path}/train`
@@ -569,6 +569,7 @@ def trainWaterLo(in_path: str, out_path: str, *,
     if epochs <= 0: raise ValueError(f"epochs={epochs} is not positive")
     if batch_size <= 0: raise ValueError(f"batch_size={batch_size} is not positive")
     if loss not in {"mse", "ssim"}: raise ValueError(f"loss='{loss}' is not 'mse' or 'ssim'")
+    if not (0.0 <= jpeg_prob <= 1.0): raise ValueError(f"jpeg_prob={jpeg_prob} must be in [0, 1]")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     random.seed(1)
@@ -591,7 +592,8 @@ def trainWaterLo(in_path: str, out_path: str, *,
     train_loader = loader_with_padding(in_path, 512, batch_size, "train")
     valid_loader = loader_with_padding(in_path, 512, batch_size, "valid")
 
-    fit(models, epochs, criterions, optimizers, device, train_loader, valid_loader, out_path, compression, lambd, alpha)
+    fit(models, epochs, criterions, optimizers, device, train_loader, valid_loader,
+        out_path, compression, lambd, alpha, jpeg_prob=jpeg_prob)
 
 
 def _prepareWaterLo(in_path: str) -> tuple[Any, torch.device]:

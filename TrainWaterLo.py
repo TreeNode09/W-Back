@@ -1,7 +1,8 @@
-"""Generate plain SD training images and retrain WaterLo with JPEG augmentation enabled."""
+"""Generate plain SD training images and retrain WaterLo with JPEG augmentation."""
 
 import json
 import os
+import random
 import time
 
 from Interface import applyPRC, getPrompts, makeWaterLoDataset, trainWaterLo
@@ -17,10 +18,17 @@ WEIGHTS_DIR = MODEL_CACHE_DIR
 MODEL_ID = "sd-research/stable-diffusion-2-1-base"
 PROMPT_DATASET = "Gustavosta/Stable-Diffusion-Prompts"
 
-NUM_IMAGES = 7500
+TEST_PROMPTS_FILE = os.path.join(EXP_DIR, "prompts.json")        # Experiment.py test set
+TRAIN_PROMPTS_FILE = os.path.join(EXP_DIR, "prompts_train.json")
+TEST_NUM_PROMPTS = 500   # match Experiment NUM_IMAGES
+PROMPT_SEED = 2509
+
+NUM_IMAGES = 5000   # 7,500 exceeds the HF dataset capacity when margin=512
 PLAIN_DIR = os.path.join(EXP_DIR, "plain_sd_train")
 DATASET_DIR = os.path.join(EXP_DIR, "waterlo_train")
-PROMPTS_FILE = os.path.join(EXP_DIR, "prompts.json")
+
+# JPEG aug: probability of applying JPEG when compression=True (old default ≈ 0.8)
+JPEG_PROB = 0.5
 
 
 def make_progress_logger(title: str):
@@ -60,19 +68,57 @@ def count_images(images_dir: str) -> int:
     )
 
 
-def load_prompts() -> list[str]:
+def _save_json(path: str, data: list[str]) -> None:
 
-    if os.path.isfile(PROMPTS_FILE):
-        with open(PROMPTS_FILE, "r", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def load_train_prompts() -> list[str]:
+    """Fetch test+train prompts in one shot, split with no string overlap."""
+
+    if os.path.isfile(TRAIN_PROMPTS_FILE):
+        with open(TRAIN_PROMPTS_FILE, "r", encoding="utf-8") as f:
             prompts = json.load(f)
         if len(prompts) >= NUM_IMAGES:
-            print(f"reuse prompts from {PROMPTS_FILE} ({len(prompts)} total)")
+            print(f"train prompts: reuse {TRAIN_PROMPTS_FILE} ({len(prompts)} total)")
             return prompts[:NUM_IMAGES]
 
-    os.makedirs(EXP_DIR, exist_ok=True)
-    prompts = getPrompts(PROMPT_DATASET, NUM_IMAGES, EXP_DIR)
-    print(f"fetched {len(prompts)} prompts into {PROMPTS_FILE}")
-    return prompts
+    n_test = TEST_NUM_PROMPTS
+    if os.path.isfile(TEST_PROMPTS_FILE):
+        with open(TEST_PROMPTS_FILE, "r", encoding="utf-8") as f:
+            test_prompts = json.load(f)
+        n_test = max(n_test, len(test_prompts))
+        print(f"test prompts: reuse {TEST_PROMPTS_FILE} ({len(test_prompts)} total)")
+    else:
+        test_prompts = None
+
+    # Extra margin: HF set has duplicate Prompt strings, and a random draw of
+    # (n_test + NUM_IMAGES) often still collides with an existing test file.
+    margin = max(512, n_test)
+    total = n_test + NUM_IMAGES + margin
+    print(f"fetch {total} prompts from {PROMPT_DATASET} (seed={PROMPT_SEED}, margin={margin})")
+    random.seed(PROMPT_SEED)
+    all_prompts = getPrompts(PROMPT_DATASET, total, out_path=None)
+
+    if test_prompts is None:
+        test_prompts = all_prompts[:TEST_NUM_PROMPTS]
+        train_prompts = all_prompts[TEST_NUM_PROMPTS:TEST_NUM_PROMPTS + NUM_IMAGES]
+        _save_json(TEST_PROMPTS_FILE, test_prompts)
+        print(f"wrote test prompts -> {TEST_PROMPTS_FILE}")
+    else:
+        banned = set(test_prompts)
+        train_prompts = [p for p in all_prompts if p not in banned][:NUM_IMAGES]
+        if len(train_prompts) < NUM_IMAGES:
+            raise RuntimeError(
+                f"only {len(train_prompts)}/{NUM_IMAGES} non-overlapping train prompts "
+                f"after fetching {total}; increase margin"
+            )
+
+    _save_json(TRAIN_PROMPTS_FILE, train_prompts)
+    print(f"wrote train prompts -> {TRAIN_PROMPTS_FILE} ({len(train_prompts)})")
+    return train_prompts
 
 
 if __name__ == "__main__":
@@ -86,8 +132,9 @@ if __name__ == "__main__":
         if n_existing > 0:
             print(f"warning: only {n_existing}/{NUM_IMAGES} images in {PLAIN_DIR}, regenerating all")
 
+        prompts = load_train_prompts()
+
         print(f"=== generate {NUM_IMAGES} plain SD images ===")
-        prompts = load_prompts()
         os.makedirs(PLAIN_DIR, exist_ok=True)
         applyPRC(
             BASE_DIR,
@@ -103,7 +150,7 @@ if __name__ == "__main__":
     n_train, n_valid = makeWaterLoDataset(PLAIN_DIR, DATASET_DIR)
     print(f"dataset ready: train={n_train}, valid={n_valid} -> {DATASET_DIR}")
 
-    print("=== train WaterLo (compression=True) ===")
+    print(f"=== train WaterLo (compression=True, jpeg_prob={JPEG_PROB}) ===")
     trainWaterLo(
         DATASET_DIR,
         WEIGHTS_DIR,
@@ -113,5 +160,6 @@ if __name__ == "__main__":
         batch_size=8,
         loss="ssim",
         compression=True,
+        jpeg_prob=JPEG_PROB,
     )
     print(f"done: weights saved to {WEIGHTS_DIR}/G.pt and {WEIGHTS_DIR}/B.pt")

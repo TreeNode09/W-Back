@@ -6,13 +6,12 @@ import torch
 from tqdm import tqdm
 import os
 
-from random import randint
+from random import randint, random, seed
 
 from WaterLo.src.loader import loader_with_padding
 from WaterLo.src.models import Generator, Bob
 from WaterLo.src.loss import GeneratorLoss, BobLoss
 from WaterLo.src.utils import Models, Losses, Optimizers
-from random import seed
 
 from WaterLo.src.jpeg import add_jpeg_noise
 from WaterLo.src.utils import crop_padding, mask_image, imsave
@@ -23,7 +22,8 @@ class LEARNING_STEP(Enum):
     TRAINING = 0
 
 
-def get_predictions(models, data, criterions, device, alpha, save_image=False, output='outputs', compression=False):
+def get_predictions(models, data, criterions, device, alpha, save_image=False, output='outputs',
+                    compression=False, jpeg_prob: float = 0.8):
     _, imgs, size = data
     imgs = imgs.to(device)
 
@@ -36,7 +36,8 @@ def get_predictions(models, data, criterions, device, alpha, save_image=False, o
     croped_imgs, resized_imgs = crop_padding(imgs, size)
     outer_masked_watermark, outer_masks, inner_masked_watermark, inner_masks = mask_image(resized_watermarks, resized_imgs)
 
-    if (randint(1, 5) != 1 and compression):
+    # jpeg_prob: probability of applying JPEG when compression=True (default 0.8 ≈ old 4/5)
+    if compression and random() < jpeg_prob:
         quality = 100 - randint(10, 40)
         compressed_watermarks = add_jpeg_noise(resized_watermarks, device, quality)
         compressed_imgs = add_jpeg_noise(resized_imgs, device, quality)
@@ -76,7 +77,8 @@ def get_predictions(models, data, criterions, device, alpha, save_image=False, o
     return generator_loss, bob_loss
 
 
-def train_one_epoch(models, data, criterions, optimizers, device, alpha, save_image=False, output="outputs", compression=False, lambd=100):
+def train_one_epoch(models, data, criterions, optimizers, device, alpha, save_image=False, output="outputs",
+                    compression=False, jpeg_prob: float = 0.8, lambd=100):
 
     # Train generator
     optimizers.G.zero_grad()
@@ -85,7 +87,10 @@ def train_one_epoch(models, data, criterions, optimizers, device, alpha, save_im
     models.G.train()
     models.B.train()
 
-    generator_loss, bob_loss = get_predictions(models, data, criterions, device, alpha, save_image=save_image, output=output, compression=compression)
+    generator_loss, bob_loss = get_predictions(
+        models, data, criterions, device, alpha, save_image=save_image, output=output,
+        compression=compression, jpeg_prob=jpeg_prob,
+    )
     (bob_loss + lambd * generator_loss).backward()
 
     optimizers.B.step()
@@ -94,14 +99,19 @@ def train_one_epoch(models, data, criterions, optimizers, device, alpha, save_im
     return generator_loss.item(), bob_loss.item()
 
 
-def valid_one_epoch(models, data, criterions, device, alpha, save_image=False, output="outputs", compression=False):
+def valid_one_epoch(models, data, criterions, device, alpha, save_image=False, output="outputs",
+                    compression=False, jpeg_prob: float = 0.8):
     models.eval()
     with torch.no_grad():
-        generator_loss, bob_loss = get_predictions(models, data, criterions, device, alpha, save_image=save_image, output=output, compression=compression)
+        generator_loss, bob_loss = get_predictions(
+            models, data, criterions, device, alpha, save_image=save_image, output=output,
+            compression=compression, jpeg_prob=jpeg_prob,
+        )
         return generator_loss.item(), bob_loss.item()
 
 
-def one_epoch(models, data_loader, criterions, optimizers, device, step, output, compression, lambd, alpha):
+def one_epoch(models, data_loader, criterions, optimizers, device, step, output, compression, lambd, alpha,
+              jpeg_prob: float = 0.8):
 
     epoch_generator_loss = 0.0
     epoch_bob_loss = 0.0
@@ -114,10 +124,16 @@ def one_epoch(models, data_loader, criterions, optimizers, device, step, output,
             save_image = True
 
         if step == LEARNING_STEP.VALIDATION:
-            generator_loss, bob_loss = valid_one_epoch(models, data, criterions, device, alpha, save_image, output, compression=compression)
+            generator_loss, bob_loss = valid_one_epoch(
+                models, data, criterions, device, alpha, save_image, output,
+                compression=compression, jpeg_prob=jpeg_prob,
+            )
 
         else:
-            generator_loss, bob_loss = train_one_epoch(models, data, criterions, optimizers, device, alpha, save_image=save_image, output=output, compression=compression, lambd=lambd)
+            generator_loss, bob_loss = train_one_epoch(
+                models, data, criterions, optimizers, device, alpha, save_image=save_image, output=output,
+                compression=compression, jpeg_prob=jpeg_prob, lambd=lambd,
+            )
 
         save_image = False
 
@@ -130,7 +146,8 @@ def one_epoch(models, data_loader, criterions, optimizers, device, step, output,
     return epoch_generator_loss, epoch_bob_loss
 
 
-def fit(models, epochs, criterions, optimizers, device, train_loader, valid_loader, output, compression, lambd, alpha) -> None:
+def fit(models, epochs, criterions, optimizers, device, train_loader, valid_loader, output, compression, lambd, alpha,
+        jpeg_prob: float = 0.8) -> None:
 
     best_loss = math.inf
 
@@ -139,13 +156,19 @@ def fit(models, epochs, criterions, optimizers, device, train_loader, valid_load
         print("=" * 20)
         print(f"EPOCH {epoch} TRAINING...")
 
-        train_generator_loss, train_bob_loss = one_epoch(models, train_loader, criterions, optimizers, device, LEARNING_STEP.TRAINING, output, compression, lambd, alpha)
+        train_generator_loss, train_bob_loss = one_epoch(
+            models, train_loader, criterions, optimizers, device, LEARNING_STEP.TRAINING,
+            output, compression, lambd, alpha, jpeg_prob=jpeg_prob,
+        )
         print(f"[TRAIN] EPOCH {epoch} - GENERATOR | LOSS: {train_generator_loss:2.4f} | BOB | LOSS:{train_bob_loss:2.4f} |")
 
         if valid_loader is not None:
             print("EPOCH " + str(epoch) + " - VALIDATING...")
 
-            valid_generator_loss, valid_bob_loss = one_epoch(models, valid_loader, criterions, optimizers, device, LEARNING_STEP.VALIDATION, output, compression, lambd, alpha)
+            valid_generator_loss, valid_bob_loss = one_epoch(
+                models, valid_loader, criterions, optimizers, device, LEARNING_STEP.VALIDATION,
+                output, compression, lambd, alpha, jpeg_prob=jpeg_prob,
+            )
 
             if (valid_generator_loss + valid_bob_loss < best_loss):
                 print('--- ACC has improved, saving model ---')
@@ -183,7 +206,10 @@ def main(args):
 
     # Train
     alpha = args.alpha if args.loss != 'jnd' else 1
-    fit(models, args.epochs, criterions, optimizers, device, train_loader, valid_loader, args.output, args.compression, args.lambd, alpha)
+    fit(
+        models, args.epochs, criterions, optimizers, device, train_loader, valid_loader,
+        args.output, args.compression, args.lambd, alpha, jpeg_prob=args.jpeg_prob,
+    )
 
 
 if __name__ == '__main__':
@@ -250,6 +276,12 @@ if __name__ == '__main__':
         "-c",
         "--compression",
         action='store_true',
+    )
+    parser.add_argument(
+        "--jpeg-prob",
+        default=0.8,
+        type=float,
+        help="Probability of applying JPEG when --compression is set (default 0.8)",
     )
     args = parser.parse_args()
     main(args)

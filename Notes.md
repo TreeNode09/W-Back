@@ -9,7 +9,7 @@ sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
 sudo apt install -y python3.11 python3.11-venv python3.11-dev
 
-git clone https://github.com/XuandongZhao/PRC-Watermark
+git clone https://github.com/TreeNode09/W-Back.git
 cd PRC
 
 python3.11 -m venv .venv

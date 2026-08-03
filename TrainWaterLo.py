@@ -24,11 +24,11 @@ TEST_NUM_PROMPTS = 500   # match Experiment NUM_IMAGES
 PROMPT_SEED = 2509
 
 NUM_IMAGES = 5000   # 7,500 exceeds the HF dataset capacity when margin=512
-PLAIN_DIR = os.path.join(EXP_DIR, "plain_sd_train")
+PRC_DIR = os.path.join(EXP_DIR, "prc_sd_train")
 DATASET_DIR = os.path.join(EXP_DIR, "waterlo_train")
 
 # JPEG aug: probability of applying JPEG when compression=True (old default ≈ 0.8)
-JPEG_PROB = 0.5
+JPEG_PROB = 0.9
 
 
 def make_progress_logger(title: str):
@@ -125,29 +125,28 @@ if __name__ == "__main__":
 
     os.makedirs(EXP_DIR, exist_ok=True)
 
-    n_existing = count_images(PLAIN_DIR)
+    n_existing = count_images(PRC_DIR)
     if n_existing >= NUM_IMAGES:
-        print(f"skip generation: {n_existing} images already in {PLAIN_DIR}")
+        print(f"skip generation: {n_existing} images already in {PRC_DIR}")
     else:
         if n_existing > 0:
-            print(f"warning: only {n_existing}/{NUM_IMAGES} images in {PLAIN_DIR}, regenerating all")
+            print(f"warning: only {n_existing}/{NUM_IMAGES} images in {PRC_DIR}, regenerating all")
 
         prompts = load_train_prompts()
 
         print(f"=== generate {NUM_IMAGES} plain SD images ===")
-        os.makedirs(PLAIN_DIR, exist_ok=True)
+        os.makedirs(PRC_DIR, exist_ok=True)
         applyPRC(
             BASE_DIR,
             "",
             MODEL_ID,
             prompts,
-            out_path=PLAIN_DIR,
-            watermark=False,
+            out_path=PRC_DIR,
             on_progress=make_progress_logger("plain_sd"),
         )
 
     print("=== build WaterLo train/valid split ===")
-    n_train, n_valid = makeWaterLoDataset(PLAIN_DIR, DATASET_DIR)
+    n_train, n_valid = makeWaterLoDataset(PRC_DIR, DATASET_DIR)
     print(f"dataset ready: train={n_train}, valid={n_valid} -> {DATASET_DIR}")
 
     print(f"=== train WaterLo (compression=True, jpeg_prob={JPEG_PROB}) ===")

@@ -665,13 +665,13 @@ if __name__ == "__main__":
     # # 4. WaterLo applying
     # plain_images = load_sorted_rgb_images(os.path.join(EXP_DIR, "plain"), NUM_IMAGES)
     # clear_timing_stats()
-    # applyWaterLo(plain_images, BASE_DIR, alpha=WL_ALPHA)
+    # applyWaterLo(plain_images, BASE_DIR, alpha=WL_ALPHA, batch_size=1)
     # stats = get_timing_stats(skip_first=SKIP)
-    # write_timing_block("WaterLo apply", {"alpha": WL_ALPHA, "n": len(plain_images), "skip": SKIP}, stats)
+    # write_timing_block("WaterLo apply", {"alpha": WL_ALPHA, "n": len(plain_images), "batch_size": 1, "skip": SKIP}, stats)
 
     # # 5. WaterLo detecting
     # wl_images = load_sorted_rgb_images(os.path.join(EXP_DIR, "plain_wl_0.005"), NUM_IMAGES)
     # clear_timing_stats()
-    # detectWaterLo(wl_images, BASE_DIR)
+    # detectWaterLo(wl_images, BASE_DIR, batch_size=1)
     # stats = get_timing_stats(skip_first=SKIP)
-    # write_timing_block("WaterLo detect", {"jpeg": None, "n": len(wl_images), "skip": SKIP}, stats)
+    # write_timing_block("WaterLo detect", {"jpeg": None, "n": len(wl_images), "batch_size": 1, "skip": SKIP}, stats)

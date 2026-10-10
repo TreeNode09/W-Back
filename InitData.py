@@ -2,7 +2,7 @@ import os
 
 from Interface import generateKey, preparePRC, applyTreeRing
 
-BASE_DIR =  r"D:\W\Data"
+BASE_DIR =  r"workspace/W-Back/Data"
 MODEL_ID = "sd-research/stable-diffusion-2-1-base"
 
 if __name__ == "__main__":

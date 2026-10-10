@@ -2,5 +2,5 @@
 Data/
 __pycache__/
 *.pdf
-Draft.md
+Draft-*.md
 References.md

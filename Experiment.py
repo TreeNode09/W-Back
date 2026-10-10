@@ -6,12 +6,12 @@ import io
 from PIL import Image, ImageFilter
 import math
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import precision_recall_curve, roc_auc_score
 
 from Interface import *
 
-# BASE_DIR = r"D:/W-Back/Data"
-BASE_DIR = r"/workspace/W-Back/Data"
+BASE_DIR = r"D:/W-Back/Data"
+# BASE_DIR = r"/workspace/W-Back/Data"
 EXP_DIR = os.path.join(BASE_DIR, "exp")
 
 PROMPTS_FILE = os.path.join(EXP_DIR, "prompts.json")
@@ -184,17 +184,33 @@ def detectPRCImages(key_id: str, num_images: int, images_dir: str, *,
     return metrics
 
 
-def generateWaterLoImages(alpha: float, num: int, in_path: str) -> None:
+def waterlo_out_dir(in_path: str, alpha: float, *, tag: str | None = None, jpeg_prob: float | None = None) -> str:
+    """Resolve WaterLo image folder under EXP_DIR.
+
+    Priority: explicit `tag` > `jpeg_prob` naming > `{in_tag}_wl_{alpha}`.
+    """
+
+    if tag is not None: folder = tag
+    else:
+
+        in_tag = os.path.basename(os.path.normpath(in_path))
+        if jpeg_prob is not None: folder = f"{in_tag}_wl_jpeg_prob_{jpeg_prob:g}_alpha_{alpha:g}"
+        else: folder = f"{in_tag}_wl_{alpha:g}"
+
+    return os.path.join(EXP_DIR, folder)
+
+
+def generateWaterLoImages(alpha: float, num: int, in_path: str, *,
+    tag: str | None = None, jpeg_prob: float | None = None,) -> str:
+    """Embed WaterLo on images under `in_path`; folder via `waterlo_out_dir`. Returns that path."""
 
     images = load_sorted_rgb_images(in_path, num)
-
-    in_tag = os.path.basename(os.path.normpath(in_path))
-    out_path = os.path.join(EXP_DIR, f"{in_tag}_wl_{alpha:g}")
+    out_path = waterlo_out_dir(in_path, alpha, tag=tag, jpeg_prob=jpeg_prob)
     os.makedirs(out_path, exist_ok=True)
 
     applyWaterLo(images, BASE_DIR, alpha=alpha, out_path=out_path, on_progress=make_progress_logger(f"wl_{alpha:g}"))
 
-    return
+    return out_path
 
 
 def generateTreeRingImages(num: int, key_id: str, *, out_dir_name: str = "treering", key_gen_seed: int = 0) -> None:
@@ -445,10 +461,36 @@ def prc_blur_eval(key_id: str, num_images: int, images_dir: str, title: str,
     return all_metrics
 
 
+def best_f1_threshold(y_true: np.ndarray, y_score: np.ndarray) -> tuple[float, float]:
+    """Best F1 and its score threshold via sklearn `precision_recall_curve`."""
+
+    y = np.asarray(y_true, dtype=np.uint8).ravel()
+    s = np.asarray(y_score, dtype=np.float64).ravel()
+    if y.size == 0 or not y.any() or y.all():
+        return 0.0, 0.5
+
+    precision, recall, thresholds = precision_recall_curve(y, s)
+    if thresholds.size == 0:
+        return 0.0, 0.5
+
+    # precision/recall are length len(thresholds)+1; last point has no threshold
+    f1s = (2 * precision[:-1] * recall[:-1]) / np.maximum(precision[:-1] + recall[:-1], 1e-12)
+    idx = int(np.argmax(f1s))
+    return float(f1s[idx]), float(thresholds[idx])
+
+
 def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ratio: float,
-    jpeg_qualities: list[int | None], *, threshold: float = 0.5,
+    jpeg_qualities: list[int | None], *, threshold: float | None = None,
 ) -> dict[int | None, dict[str, float | None]]:
-    """WaterLo noise-rect + optional JPEG sweep (`None` = no compression). Writes one result block."""
+    """WaterLo noise-rect + optional JPEG sweep (`None` = no compression). Writes one result block.
+
+    `threshold=None` (default): pick the score cutoff that maximizes F1 on pooled pixels
+    of this split (sklearn `precision_recall_curve`), and report that best-F1 + threshold.
+    Pass a float to keep a fixed cutoff instead.
+
+    Also reports per-image-averaged detector scores on tampered vs watermarked pixels
+    (`mean_score_tamper`, `mean_score_wm`) to expose near-constant high maps.
+    """
 
     originals = load_sorted_rgb_images(images_dir, num_images)
 
@@ -458,9 +500,10 @@ def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ra
         attacked.append(atk)
         gt_masks.append(gt)
 
+    thr_tag = "best-F1" if threshold is None else f"fixed={threshold:g}"
     block_lines = [
         "", "=" * 72, f"{title} WaterLo Noise-Rect under JPEG | {time.strftime('%m-%d %H:%M')}",
-        f"qualities={jpeg_qualities} side_ratio={side_ratio} threshold={threshold}", ""
+        f"qualities={jpeg_qualities} side_ratio={side_ratio} threshold={thr_tag}", ""
     ]
 
     all_metrics: dict[int | None, dict[str, float | None]] = {}
@@ -474,13 +517,23 @@ def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ra
             images, BASE_DIR, on_progress=make_progress_logger("detect_waterlo_rect"),
         )
 
-        ious, f1s, aucs = [], [], []
-        for pred, gt in zip(preds, gt_masks):
+        score_list = [np.asarray(p, dtype=np.float64).ravel() for p in preds]
+        gt_list = [np.asarray(g, dtype=np.uint8).ravel() for g in gt_masks]
+        y_all = np.concatenate(gt_list) if gt_list else np.zeros(0, dtype=np.uint8)
+        s_all = np.concatenate(score_list) if score_list else np.zeros(0, dtype=np.float64)
 
-            score_map = np.asarray(pred, dtype=np.float32)
-            pred_mask = (score_map >= threshold).astype(np.uint8)
-            pred_b = pred_mask.astype(bool)
-            gt_b = gt.astype(bool)
+        if threshold is None:
+            best_f1, used_thr = best_f1_threshold(y_all, s_all)
+        else:
+            used_thr = float(threshold)
+            best_f1 = None
+
+        ious, f1s, aucs = [], [], []
+        mean_tamper, mean_wm = [], []
+        for s, y in zip(score_list, gt_list):
+
+            pred_b = s >= used_thr
+            gt_b = y.astype(bool)
             tp = np.logical_and(pred_b, gt_b).sum()
             fp = np.logical_and(pred_b, ~gt_b).sum()
             fn = np.logical_and(~pred_b, gt_b).sum()
@@ -491,8 +544,10 @@ def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ra
             ious.append(iou)
             f1s.append(f1)
 
-            s = score_map.astype(np.float64).ravel()
-            y = gt.astype(np.uint8).ravel()
+            tamper = ~gt_b
+            if tamper.any(): mean_tamper.append(float(s[tamper].mean()))
+            if gt_b.any(): mean_wm.append(float(s[gt_b].mean()))
+
             if y.any() and not y.all(): auc = float(roc_auc_score(y, s))
             else: auc = 0.5
             aucs.append(auc)
@@ -500,11 +555,14 @@ def waterlo_jpeg_rect_eval(num_images: int, images_dir: str, title: str, side_ra
         metrics: dict[str, float | None] = {
             "count": float(len(preds)),
             "side_ratio": float(side_ratio),
-            "threshold": float(threshold),
+            "threshold": float(used_thr),
             "jpeg_quality": float(q) if q is not None else None,
             "iou": float(np.mean(ious)) if ious else 0.0,
-            "f1": float(np.mean(f1s)) if f1s else 0.0,
+            "f1": float(best_f1) if best_f1 is not None else (float(np.mean(f1s)) if f1s else 0.0),
+            "f1_mean_images": float(np.mean(f1s)) if f1s else 0.0,
             "auc": float(np.mean(aucs)) if aucs else 0.5,
+            "mean_score_tamper": float(np.mean(mean_tamper)) if mean_tamper else None,
+            "mean_score_wm": float(np.mean(mean_wm)) if mean_wm else None,
         }
         print(metrics)
 
@@ -539,8 +597,8 @@ if __name__ == "__main__":
     TREERING_KEY_ID = "7ba21a512017c983d31e636bb9a0a348"
 
 
-    # # Generate test image sets
-    # ALPHAS = [0.002, 0.005, 0.01, 0.05, 0.1, 0.2]
+    # Generate test image sets
+    ALPHAS = [0.002, 0.005, 0.01, 0.05, 0.1, 0.2]
 
     # prompts = preparePrompts(NUM_IMAGES, seed=42)
     # print(f"Prepared {len(prompts)} prompt(s) at {PROMPTS_FILE}")
@@ -553,11 +611,11 @@ if __name__ == "__main__":
     # print("\n=== PRC ===\n")
     # generatePRCImages(NUM_IMAGES, watermark=True, key_id=KEY_ID)
 
-    # # 3. no PRC + WaterLo(alpha)
-    # for alpha in ALPHAS:
+    # 3. no PRC + WaterLo(alpha)
+    for alpha in [0.005]:
 
-    #     print(f"\n=== WATERLO alpha={alpha} ===\n")
-    #     generateWaterLoImages(alpha, NUM_IMAGES, os.path.join(EXP_DIR, "plain"))
+        print(f"\n=== WATERLO alpha={alpha} ===\n")
+        generateWaterLoImages(alpha, NUM_IMAGES, os.path.join(EXP_DIR, "plain"))
 
     # # 4. PRC + WaterLo(alpha)
     # for alpha in ALPHAS:

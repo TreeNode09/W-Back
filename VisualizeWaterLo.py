@@ -18,7 +18,7 @@ BASE_DIR = r"D:\W-Back\Data"
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 OUT_DIR = os.path.join(BASE_DIR, "exp", "waterlo_structure")
 
-IMAGE_PATHS = [os.path.join(BASE_DIR, "exp", "plain", "57.png")]    # Input image(s) to visualize
+IMAGE_PATHS = [os.path.join(BASE_DIR, "exp", "plain", "12.png")]    # Input image(s) to visualize
 SCALE = 0.1 # Amplification for midgray view: 0.5 + SCALE * w
 
 

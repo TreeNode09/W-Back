@@ -20,6 +20,7 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 BASE_DIR = r"D:\W-Back\Data"
+# BASE_DIR = r"/workspace/W-Back/Data"
 
 PROMPT_DATASET = "Gustavosta/Stable-Diffusion-Prompts"
 BATCH_SIZE = 8
@@ -165,9 +166,10 @@ def _run_decode_prc_job(job_id: str, sid: str, pil_images: list[Any], key_id: st
         try:
 
             results = decodePRC(BASE_DIR, key_id, model_id, pil_images, on_progress=on_prc)
-            payload = [{"detect": detect, "decode_bits": bits} for (detect, bits) in results]
+            detects = [detect for (detect, bits) in results]
+            decodes = [bits for (detect, bits) in results]
 
-            socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
+            socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "detects": detects, "decodes": decodes, "count": len(detects)}, to=sid)
 
         except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
 
@@ -260,8 +262,9 @@ def _run_decode_prc_job_test(job_id: str, sid: str, pil_images: list[Any], key_i
                 if current <= total: time.sleep(1.0)
 
             _load_n_images_from_test(n)
-            payload = [{"detect": True, "decode_bits": PRC_DECODE_BITS_TEST} for _ in range(n)]
-            socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "results": payload, "count": len(payload)}, to=sid)
+            detects = [True] * n
+            decodes = [PRC_DECODE_BITS_TEST] * n
+            socketio.emit("decode_done", {"job_id": job_id, "method": "prc", "detects": detects, "decodes": decodes, "count": n}, to=sid)
 
         except Exception as e: socketio.emit("decode_error", {"job_id": job_id, "method": "prc", "error": str(e)}, to=sid)
 
@@ -512,7 +515,7 @@ def handle_decode():
     - `decode_prc`: `{"job_id": str, "current": int, "total": int}`
     - `decode_waterlo`: `{"job_id": str, "current": int, "total": int}`
     - `decode_done`:
-        - `{"job_id": str, "method": "prc", "results": [{"detect": bool, "decode_bits": str | null}, ...], "count": int}`
+        - `{"job_id": str, "method": "prc", "detects": [boolean, ...], "decodes": [string, ...], "count": int}`
         - `{"job_id": str, "method": "waterlo", "maps": [base64, ...], "preds": [[float, ...], ...], "count": int}`
     - `decode_error`: `{"job_id": str, "method": "prc"|"waterlo", "error": str}`
     """

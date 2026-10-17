@@ -10,7 +10,7 @@ from sklearn.metrics import precision_recall_curve, roc_auc_score
 
 from Interface import *
 
-BASE_DIR = r"D:/W-Back/Data"
+BASE_DIR = r"D:\W-Back\Data"
 # BASE_DIR = r"/workspace/W-Back/Data"
 EXP_DIR = os.path.join(BASE_DIR, "exp")
 
